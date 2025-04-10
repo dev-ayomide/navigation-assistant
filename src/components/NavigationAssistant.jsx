@@ -28,23 +28,26 @@ const NavigationAssistant = () => {
   useEffect(() => {
     const checkApiStatus = async () => {
       try {
-        const response = await fetch(`${API_ENDPOINT}/health`, {
+        console.log("Checking API status at:", API_ENDPOINT)
+
+        // First try a simple fetch to test connectivity
+        const response = await fetch(`${API_ENDPOINT}/socket.io/?EIO=4&transport=polling`, {
           method: "GET",
           mode: "cors",
-          headers: {
-            Accept: "application/json",
-          },
+          cache: "no-cache",
         })
 
-        if (response.ok) {
+        if (response.ok || response.status === 200) {
+          console.log("API connectivity test successful")
           setApiStatus("Online")
           setError(null)
         } else {
+          console.error("API connectivity test failed with status:", response.status)
           setApiStatus("Error")
           setError("API is not responding correctly. Some features may not work.")
         }
       } catch (err) {
-        console.error("API health check failed:", err)
+        console.error("API connectivity test failed with error:", err)
         setApiStatus("Offline")
         setError("Cannot connect to the API server. Please check your internet connection.")
       }
@@ -72,6 +75,9 @@ const NavigationAssistant = () => {
         transports: ["websocket", "polling"],
         upgrade: true,
         forceNew: true,
+        secure: true,
+        rejectUnauthorized: false,
+        withCredentials: false,
       })
 
       socketRef.current = socket
@@ -211,155 +217,113 @@ const NavigationAssistant = () => {
 
       setCameraPermissionRequested(true)
 
-      // For Android, use the simplest approach first
-      if (isAndroid) {
-        console.log("Android detected - using simplified camera approach")
+      // For mobile devices, use a more direct approach to get the back camera
+      if (isMobile) {
+        console.log("Mobile device detected - using direct back camera request")
 
         try {
-          // Start with the most basic request
-          console.log("Requesting basic camera access for Android")
-          const basicStream = await navigator.mediaDevices.getUserMedia({
+          // Explicitly request the back camera first
+          console.log("Requesting back camera access")
+          const backCameraStream = await navigator.mediaDevices.getUserMedia({
             audio: false,
-            video: true,
+            video: {
+              facingMode: { exact: "environment" },
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+            },
           })
 
           if (videoRef.current) {
-            videoRef.current.srcObject = basicStream
-            streamRef.current = basicStream
+            videoRef.current.srcObject = backCameraStream
+            streamRef.current = backCameraStream
             setError(null)
 
-            // On Android, explicitly play the video
             try {
               await videoRef.current.play()
-              console.log("Video playback started successfully")
-
-              // Now try to switch to back camera if possible
-              setTimeout(async () => {
-                try {
-                  console.log("Attempting to switch to back camera")
-                  const backCameraStream = await navigator.mediaDevices.getUserMedia({
-                    audio: false,
-                    video: { facingMode: "environment" },
-                  })
-
-                  // Stop old tracks
-                  basicStream.getVideoTracks().forEach((track) => track.stop())
-
-                  // Set new stream
-                  videoRef.current.srcObject = backCameraStream
-                  streamRef.current = backCameraStream
-
-                  try {
-                    await videoRef.current.play()
-                    console.log("Back camera video started successfully")
-                  } catch (playErr) {
-                    console.error("Error playing back camera video:", playErr)
-                  }
-                } catch (backCameraErr) {
-                  console.warn("Could not switch to back camera, using default", backCameraErr)
-                  // Continue with front camera
-                }
-              }, 500)
+              console.log("Back camera video started successfully")
+              return // Exit early if successful
             } catch (playErr) {
-              console.error("Error playing video:", playErr)
-              // Don't throw here, just log it
+              console.error("Error playing back camera video:", playErr)
+              // Continue to fallback
             }
           }
-          return // Exit early if successful
-        } catch (androidErr) {
-          console.error("Android basic camera access failed:", androidErr)
-          throw new Error(`Android camera error: ${androidErr.name}. Please check Chrome camera permissions.`)
+        } catch (backCameraErr) {
+          console.warn("Could not access back camera with exact constraint, trying fallback", backCameraErr)
+          // Continue to fallback approach
         }
-      }
 
-      // iOS-specific handling
-      if (isIOS) {
-        console.log("iOS detected - using iOS-specific camera handling")
-
+        // Fallback to a more permissive approach
         try {
-          // For iOS, start with the absolute simplest request
-          console.log("Requesting basic camera access for iOS")
-          const basicStream = await navigator.mediaDevices.getUserMedia({
+          console.log("Trying fallback camera access")
+          const fallbackStream = await navigator.mediaDevices.getUserMedia({
             audio: false,
-            video: true,
+            video: {
+              facingMode: "environment", // Prefer back camera but don't require it
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+            },
           })
 
           if (videoRef.current) {
-            videoRef.current.srcObject = basicStream
-            streamRef.current = basicStream
+            videoRef.current.srcObject = fallbackStream
+            streamRef.current = fallbackStream
             setError(null)
 
-            // On iOS, we need to explicitly play the video
             try {
               await videoRef.current.play()
-              console.log("Video playback started successfully")
+              console.log("Fallback camera video started successfully")
+              return // Exit early if successful
             } catch (playErr) {
-              console.error("Error playing video:", playErr)
-              // Don't throw here, just log it
+              console.error("Error playing fallback camera video:", playErr)
             }
+          }
+        } catch (fallbackErr) {
+          console.error("Fallback camera access failed:", fallbackErr)
 
-            // Now try to get the back camera if possible
-            setTimeout(async () => {
+          // Last resort: try with any camera
+          try {
+            console.log("Trying basic camera access as last resort")
+            const basicStream = await navigator.mediaDevices.getUserMedia({
+              audio: false,
+              video: true,
+            })
+
+            if (videoRef.current) {
+              videoRef.current.srcObject = basicStream
+              streamRef.current = basicStream
+              setError(null)
+
               try {
-                console.log("Attempting to switch to back camera")
-                const backCameraStream = await navigator.mediaDevices.getUserMedia({
-                  audio: false,
-                  video: { facingMode: "environment" },
-                })
-
-                // Stop old tracks
-                basicStream.getVideoTracks().forEach((track) => track.stop())
-
-                // Set new stream
-                videoRef.current.srcObject = backCameraStream
-                streamRef.current = backCameraStream
-
-                try {
-                  await videoRef.current.play()
-                  console.log("Back camera video started successfully on iOS")
-                } catch (playErr) {
-                  console.error("Error playing back camera video:", playErr)
-                }
-              } catch (backCameraErr) {
-                console.warn("Could not switch to back camera, using default", backCameraErr)
-                // Continue with front camera
+                await videoRef.current.play()
+                console.log("Basic camera video started successfully")
+              } catch (playErr) {
+                console.error("Error playing basic camera video:", playErr)
+                throw playErr // Re-throw to be caught by the outer catch
               }
-            }, 500)
+            }
+          } catch (basicErr) {
+            console.error("Basic camera access failed:", basicErr)
+            throw basicErr // Re-throw to be caught by the outer catch
           }
-          return // Exit early if successful
-        } catch (iosErr) {
-          console.error("iOS basic camera access failed:", iosErr)
-          throw new Error(
-            `iOS camera error: ${iosErr.name}. Please check Safari camera permissions in your device settings.`,
-          )
         }
-      }
+      } else {
+        // Non-mobile devices use the original approach
+        const constraints = {
+          audio: false,
+          video: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+        }
 
-      // Non-mobile devices continue with normal flow
-      const constraints = {
-        audio: false,
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-      }
+        console.log("Requesting camera with constraints:", JSON.stringify(constraints))
+        const stream = await navigator.mediaDevices.getUserMedia(constraints)
 
-      console.log("Requesting camera with constraints:", JSON.stringify(constraints))
-      const stream = await navigator.mediaDevices.getUserMedia(constraints)
-
-      // Check if we got a video track
-      const videoTracks = stream.getVideoTracks()
-      if (videoTracks.length === 0) {
-        throw new Error("No video track available in the media stream")
-      }
-
-      console.log("Camera accessed successfully. Video tracks:", videoTracks.length)
-      console.log("Camera settings:", videoTracks[0].getSettings())
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        streamRef.current = stream
-        setError(null)
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream
+          streamRef.current = stream
+          setError(null)
+        }
       }
     } catch (err) {
       console.error("Camera initialization error:", err)
@@ -370,21 +334,15 @@ const NavigationAssistant = () => {
       if (isAndroid) {
         if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
           errorMessage =
-            "Camera access denied. On Android Chrome, please:\n1. Tap the lock icon in the address bar\n2. Select 'Site settings'\n3. Enable camera access\n4. Reload the page"
+            "Camera access denied. On Android Chrome, please tap the lock icon in the address bar, select 'Site settings', and enable camera access."
         } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
           errorMessage = "Camera is in use by another app. Please close any apps using the camera and try again."
-        } else if (err.name === "OverconstrainedError" || err.name === "ConstraintNotSatisfiedError") {
-          errorMessage = "Your device doesn't support the requested camera mode. Please try a different browser."
-        } else if (err.message && err.message.includes("Android camera error")) {
-          errorMessage = err.message
         } else {
           errorMessage = "Android camera error. Please check your camera permissions in Chrome settings."
         }
       } else if (isIOS) {
         if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
           errorMessage = "Camera access denied. On iOS, go to Settings > Safari > Camera and ensure it's allowed."
-        } else if (err.message && err.message.includes("iOS camera error")) {
-          errorMessage = err.message
         } else {
           errorMessage = "iOS camera error. Please check your camera permissions in Safari settings."
         }
@@ -396,10 +354,6 @@ const NavigationAssistant = () => {
         errorMessage = "Camera is already in use by another application."
       } else if (err.name === "NotSupportedError") {
         errorMessage = "Camera access is not supported by this browser."
-      } else if (err.name === "TypeError" && err.message.includes("mediaDevices")) {
-        errorMessage = "Camera API not available. Try using HTTPS or a different browser."
-      } else if (err.name === "AbortError") {
-        errorMessage = "Camera access was aborted. Please try again."
       }
 
       setError(errorMessage)
@@ -471,31 +425,102 @@ const NavigationAssistant = () => {
     setIsSpeaking(true)
     console.log("Starting to speak:", message)
 
+    // Create a new utterance
     const utterance = new SpeechSynthesisUtterance(message)
     utteranceRef.current = utterance
 
+    // Set properties for better speech on mobile
+    utterance.rate = isIOS ? 1.1 : 1.0 // Slightly faster on iOS
+    utterance.pitch = 1.0
+    utterance.volume = 1.0 // Maximum volume
+
     // Try to select a clear voice if available
-    let voices = window.speechSynthesis.getVoices()
+    const voices = window.speechSynthesis.getVoices()
     console.log("Available voices:", voices.length)
 
-    // If no voices are available yet, wait a moment and try again (common issue on mobile)
-    if (voices.length === 0) {
-      console.log("No voices available yet, waiting...")
-      setTimeout(() => {
-        voices = window.speechSynthesis.getVoices()
-        console.log("Voices after waiting:", voices.length)
+    // Select the best voice for the platform
+    let selectedVoice = null
 
-        // Try to find a good voice
-        selectVoice(utterance, voices)
-
-        // Continue with speech
-        continueSpeech(utterance, message)
-      }, 1000)
-    } else {
-      // Voices are available, proceed normally
-      selectVoice(utterance, voices)
-      continueSpeech(utterance, message)
+    // For iOS, try to find a specific voice that works well
+    if (isIOS) {
+      selectedVoice = voices.find(
+        (voice) =>
+          voice.name.includes("Samantha") ||
+          voice.name.includes("Karen") ||
+          (voice.lang === "en-US" && voice.localService === true),
+      )
     }
+    // For Android, prefer Google voices
+    else if (isAndroid) {
+      selectedVoice = voices.find(
+        (voice) =>
+          (voice.name.includes("Google") && voice.lang.includes("en")) || voice.name.includes("English United States"),
+      )
+    }
+
+    // Fallback to any English voice
+    if (!selectedVoice) {
+      selectedVoice = voices.find(
+        (voice) => voice.lang.includes("en-US") || voice.lang.includes("en-GB") || voice.lang.includes("en"),
+      )
+    }
+
+    if (selectedVoice) {
+      console.log("Selected voice:", selectedVoice.name)
+      utterance.voice = selectedVoice
+    } else if (voices.length > 0) {
+      // Just use the first available voice if no English voice is found
+      console.log("Using default voice:", voices[0].name)
+      utterance.voice = voices[0]
+    }
+
+    // Handle speech completion
+    utterance.onend = () => {
+      console.log("Speech completed")
+      setIsSpeaking(false)
+      // Wait a short delay before starting next capture cycle
+      setTimeout(() => {
+        console.log("Starting next capture cycle after speech")
+        startCaptureCycle()
+      }, 500)
+    }
+
+    utterance.onerror = (event) => {
+      console.error("Speech synthesis error:", event)
+      setIsSpeaking(false)
+      setTimeout(startCaptureCycle, 500)
+    }
+
+    // For iOS, we need to use a workaround to make speech work reliably
+    if (isIOS) {
+      // iOS requires speech to be triggered within a user interaction
+      // and sometimes needs a "kick" to start properly
+      speechSynthesis.speak(utterance)
+
+      // This pause and resume trick helps on iOS
+      setTimeout(() => {
+        speechSynthesis.pause()
+        speechSynthesis.resume()
+      }, 100)
+    } else {
+      // Normal speech for other platforms
+      speechSynthesis.speak(utterance)
+    }
+
+    // Set a timeout to prevent hanging if speech doesn't complete
+    const timeoutDuration = Math.max(5000, message.length * 100)
+    setTimeout(() => {
+      if (isSpeaking && utteranceRef.current === utterance) {
+        console.warn("Speech timeout reached, forcing next cycle")
+        setIsSpeaking(false)
+        startCaptureCycle()
+      }
+    }, timeoutDuration)
+  }
+
+  // Add this function to force reload the page - useful for mobile troubleshooting
+  const forceReload = () => {
+    window.location.reload()
   }
 
   // Add these helper functions after the speakMessage function
@@ -614,7 +639,7 @@ const NavigationAssistant = () => {
     }
   }
 
-  // Toggle active state
+  // Modify the toggleActive function to include audio initialization
   const toggleActive = () => {
     const newState = !isActive
     setIsActive(newState)
@@ -623,9 +648,38 @@ const NavigationAssistant = () => {
       // Initialize audio context to help with mobile audio restrictions
       initAudio()
 
-      // List available devices for debugging
-      listAvailableDevices().then(() => {
-        initCamera()
+      // Check API status before proceeding
+      const checkApiStatus = async () => {
+        try {
+          console.log("Checking API status at:", API_ENDPOINT)
+
+          // First try a simple fetch to test connectivity
+          const response = await fetch(`${API_ENDPOINT}/socket.io/?EIO=4&transport=polling`, {
+            method: "GET",
+            mode: "cors",
+            cache: "no-cache",
+          })
+
+          if (response.ok || response.status === 200) {
+            console.log("API connectivity test successful")
+            setApiStatus("Online")
+            setError(null)
+          } else {
+            console.error("API connectivity test failed with status:", response.status)
+            setApiStatus("Error")
+            setError("API is not responding correctly. Some features may not work.")
+          }
+        } catch (err) {
+          console.error("API connectivity test failed with error:", err)
+          setApiStatus("Offline")
+          setError("Cannot connect to the API server. Please check your internet connection.")
+        }
+      }
+      checkApiStatus().then(() => {
+        // List available devices for debugging
+        listAvailableDevices().then(() => {
+          initCamera()
+        })
       })
     } else {
       if (streamRef.current) {
@@ -859,10 +913,10 @@ const NavigationAssistant = () => {
                   <>
                     <line x1="1" y1="1" x2="23" y2="23"></line>
                     <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"></path>
-                    <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"></path>
-                    <path d="M10.71 5.05A16 16 0 0 1 22.58 9"></path>
-                    <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"></path>
-                    <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+                    <path d="M5 12.55a10.94 10.94 0 0 0-3.17-2.39"></path>
+                    <path d="M10.71 5.05A16 16 0 0 0 1.42 9"></path>
+                    <path d="M22.58 9a15.91 15.91 0 0 0-4.7-2.88"></path>
+                    <path d="M8.53 16.11a6 6 0 0 0 6.95 0"></path>
                     <line x1="12" y1="20" x2="12.01" y2="20"></line>
                   </>
                 )}
@@ -992,6 +1046,13 @@ const NavigationAssistant = () => {
           }}
         >
           Test Speech
+        </button>
+
+        <button
+          className="w-full py-2 mt-2 text-sm font-medium rounded-md text-white bg-purple-500 hover:bg-purple-600"
+          onClick={forceReload}
+        >
+          Reload Application
         </button>
 
         <div className="p-4 bg-slate-100 rounded-lg">
