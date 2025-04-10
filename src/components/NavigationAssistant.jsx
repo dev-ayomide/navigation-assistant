@@ -13,17 +13,47 @@ const NavigationAssistant = () => {
   const [isIOS, setIsIOS] = useState(false)
   const [isAndroid, setIsAndroid] = useState(false)
   const [cameraPermissionRequested, setCameraPermissionRequested] = useState(false)
-  const [serverAddress, setServerAddress] = useState("http://192.168.179.70:5000")
-  const [showSettings, setShowSettings] = useState(false)
+  const [apiStatus, setApiStatus] = useState("Checking...")
 
   const videoRef = useRef(null)
   const streamRef = useRef(null)
   const socketRef = useRef(null)
   const isCapturingRef = useRef(false)
   const utteranceRef = useRef(null)
-  const serverInputRef = useRef(null)
 
-  // Socket.IO connection - connect to Flask server
+  // API endpoint configuration
+  const API_ENDPOINT = "https://see-for-me-api-production.up.railway.app"
+
+  // Check API status on component mount
+  useEffect(() => {
+    const checkApiStatus = async () => {
+      try {
+        const response = await fetch(`${API_ENDPOINT}/health`, {
+          method: "GET",
+          mode: "cors",
+          headers: {
+            Accept: "application/json",
+          },
+        })
+
+        if (response.ok) {
+          setApiStatus("Online")
+          setError(null)
+        } else {
+          setApiStatus("Error")
+          setError("API is not responding correctly. Some features may not work.")
+        }
+      } catch (err) {
+        console.error("API health check failed:", err)
+        setApiStatus("Offline")
+        setError("Cannot connect to the API server. Please check your internet connection.")
+      }
+    }
+
+    checkApiStatus()
+  }, [])
+
+  // Socket.IO connection - connect to backend API
   useEffect(() => {
     if (!isActive) return
 
@@ -33,10 +63,10 @@ const NavigationAssistant = () => {
     }
 
     try {
-      console.log(`Attempting to connect to server at: ${serverAddress}`)
+      console.log(`Connecting to API at: ${API_ENDPOINT}`)
 
       // Create socket with explicit options for better compatibility
-      const socket = io("see-for-me-api-production.up.railway.app", {
+      const socket = io(API_ENDPOINT, {
         reconnectionAttempts: 5,
         timeout: 10000,
         transports: ["websocket", "polling"],
@@ -47,26 +77,24 @@ const NavigationAssistant = () => {
       socketRef.current = socket
 
       socket.on("connect", () => {
-        console.log("Socket.IO connected successfully!")
+        console.log("Socket.IO connected successfully to API!")
         setIsConnected(true)
         setError(null)
       })
 
       socket.on("disconnect", () => {
-        console.log("Socket.IO disconnected from server")
+        console.log("Socket.IO disconnected from API")
         setIsConnected(false)
       })
 
       socket.on("connect_error", (err) => {
         console.error("Socket.IO connection error:", err)
-        setError(
-          `Connection error: Cannot connect to server at ${serverAddress}. Please check the server address and ensure the server is running.`,
-        )
+        setError(`Connection error: Cannot connect to API server. Please check your internet connection.`)
         setIsConnected(false)
       })
 
       socket.on("server_response", (data) => {
-        console.log("Received server response:", data)
+        console.log("Received API response:", data)
         const message = data.message || "No guidance available"
         setLastMessage(message)
         speakMessage(message)
@@ -77,7 +105,7 @@ const NavigationAssistant = () => {
         if (socket.connected) return
         console.error("Socket.IO connection timeout")
         setError(
-          `Connection timeout: Could not connect to server at ${serverAddress} within 10 seconds. Please check the server address and ensure the server is running.`,
+          `Connection timeout: Could not connect to API server within 10 seconds. Please check your internet connection.`,
         )
       }, 10000)
 
@@ -88,10 +116,10 @@ const NavigationAssistant = () => {
       }
     } catch (err) {
       console.error("Error creating Socket.IO connection:", err)
-      setError(`Connection error: ${err.message}. Please check the server address.`)
+      setError(`Connection error: ${err.message}. Please check your internet connection.`)
       return () => {}
     }
-  }, [isActive, serverAddress])
+  }, [isActive])
 
   // Detect device type
   useEffect(() => {
@@ -130,11 +158,15 @@ const NavigationAssistant = () => {
 
       ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height)
 
-      canvas.toBlob((blob) => {
-        const reader = new FileReader()
-        reader.onloadend = () => resolve(reader.result)
-        reader.readAsArrayBuffer(blob)
-      }, "image/webp")
+      canvas.toBlob(
+        (blob) => {
+          const reader = new FileReader()
+          reader.onloadend = () => resolve(reader.result)
+          reader.readAsArrayBuffer(blob)
+        },
+        "image/webp",
+        0.8,
+      ) // Use 80% quality for better performance
     })
   }
 
@@ -156,7 +188,7 @@ const NavigationAssistant = () => {
         await new Promise((res) => setTimeout(res, 300))
       }
 
-      console.log("Sending batch of", frames.length, "frames to Flask server")
+      console.log("Sending batch of", frames.length, "frames to API")
       if (socketRef.current && socketRef.current.connected) {
         socketRef.current.emit("send_frames_batch", { frames: frames })
       } else {
@@ -284,6 +316,7 @@ const NavigationAssistant = () => {
 
                 try {
                   await videoRef.current.play()
+                  console.log("Back camera video started successfully on iOS")
                 } catch (playErr) {
                   console.error("Error playing back camera video:", playErr)
                 }
@@ -674,26 +707,6 @@ const NavigationAssistant = () => {
     }
   }
 
-  // Handle server address update
-  const updateServerAddress = () => {
-    if (serverInputRef.current && serverInputRef.current.value) {
-      const newAddress = serverInputRef.current.value.trim()
-      if (newAddress !== serverAddress) {
-        console.log(`Updating server address from ${serverAddress} to ${newAddress}`)
-        setServerAddress(newAddress)
-
-        // If active, reconnect
-        if (isActive) {
-          if (socketRef.current) {
-            socketRef.current.disconnect()
-          }
-          setIsConnected(false)
-        }
-      }
-      setShowSettings(false)
-    }
-  }
-
   // Add a useEffect to load voices as soon as possible
   // Add this after your other useEffects
   useEffect(() => {
@@ -778,15 +791,10 @@ const NavigationAssistant = () => {
             <div className="mt-2 text-sm">
               <p className="font-medium">Connection Troubleshooting:</p>
               <ol className="list-decimal pl-5 mt-1 space-y-1">
-                <li>Make sure your Flask server is running</li>
-                <li>Verify the server address is correct (currently: {serverAddress})</li>
-                <li>Ensure your phone and computer are on the same network</li>
-                <li>Check if any firewall is blocking the connection</li>
-                <li>
-                  <button className="text-blue-600 underline" onClick={() => setShowSettings(true)}>
-                    Click here to update server address
-                  </button>
-                </li>
+                <li>Make sure you have an active internet connection</li>
+                <li>Check if the API server is online</li>
+                <li>Try reloading the page</li>
+                <li>If the problem persists, the API server might be down</li>
               </ol>
             </div>
           )}
@@ -815,30 +823,6 @@ const NavigationAssistant = () => {
               </ol>
             </div>
           )}
-        </div>
-      )}
-
-      {showSettings && (
-        <div className="p-4 bg-blue-50 rounded-md">
-          <h3 className="font-medium mb-2">Server Settings</h3>
-          <div className="flex flex-col gap-2">
-            <label className="text-sm text-gray-600">Server Address (include http:// and port)</label>
-            <div className="flex gap-2">
-              <input
-                ref={serverInputRef}
-                type="text"
-                className="flex-1 p-2 border rounded"
-                defaultValue={serverAddress}
-                placeholder="http://192.168.x.x:5000"
-              />
-              <button className="bg-blue-500 text-white px-3 py-2 rounded" onClick={updateServerAddress}>
-                Save
-              </button>
-            </div>
-            <p className="text-xs text-gray-500 mt-1">
-              This should be the IP address and port of your Flask server. Example: http://192.168.1.100:5000
-            </p>
-          </div>
         </div>
       )}
 
@@ -886,11 +870,7 @@ const NavigationAssistant = () => {
               <span>{isConnected ? "Connected" : "Disconnected"}</span>
             </div>
 
-            <button
-              onClick={() => setShowSettings(!showSettings)}
-              className="text-gray-500 hover:text-gray-700"
-              aria-label="Settings"
-            >
+            <div className="flex items-center gap-2 text-sm">
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 width="20"
@@ -901,11 +881,14 @@ const NavigationAssistant = () => {
                 strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
+                className={apiStatus === "Online" ? "text-emerald-500" : "text-red-500"}
               >
-                <circle cx="12" cy="12" r="3"></circle>
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82 1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                <line x1="8" y1="21" x2="16" y2="21"></line>
+                <line x1="12" y1="17" x2="12" y2="21"></line>
               </svg>
-            </button>
+              <span>API: {apiStatus}</span>
+            </div>
           </div>
         </div>
 
@@ -1029,12 +1012,7 @@ const NavigationAssistant = () => {
             {cameraPermissionRequested && !error && " • Camera permission requested"}
           </p>
           <p className="text-sm text-gray-500 mb-2">
-            Server: {serverAddress} • {isConnected ? "Connected" : "Disconnected"}
-            {!isConnected && (
-              <button className="ml-2 text-blue-600 underline" onClick={() => setShowSettings(true)}>
-                Change
-              </button>
-            )}
+            API: {apiStatus} • {isConnected ? "Connected" : "Disconnected"}
           </p>
           {lastMessage && (
             <>
