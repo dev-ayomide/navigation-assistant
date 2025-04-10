@@ -1063,38 +1063,6 @@ const NavigationAssistant = () => {
           Initialize Speech
         </button>
 
-        {/* You can remove the test speech section if you want, or keep it */}
-        {/* Enhanced test speech section */}
-        <div className="p-4 bg-blue-50 rounded-lg">
-          <h3 className="font-medium mb-2">Speech Test</h3>
-          <p className="text-sm mb-3">
-            If the app isn't speaking, tap the button below to test speech functionality. This will help diagnose any
-            issues with your device's speech capabilities.
-          </p>
-          <div className="flex flex-col gap-2">
-            <button
-              className="w-full py-3 text-base font-medium rounded-md text-white bg-blue-500 hover:bg-blue-600 active:bg-blue-700"
-              onClick={handleTestSpeech}
-            >
-              Test Speech Now
-            </button>
-            <div className="text-sm mt-1">
-              Status:{" "}
-              <span
-                className={
-                  speechStatus.includes("Success")
-                    ? "text-green-600 font-medium"
-                    : speechStatus.includes("Error")
-                      ? "text-red-600 font-medium"
-                      : "text-blue-600 font-medium"
-                }
-              >
-                {speechStatus}
-              </span>
-            </div>
-          </div>
-        </div>
-
         {lastMessage && (
           <div className="p-4 bg-slate-100 rounded-lg">
             <h3 className="font-medium mb-1">Last Guidance:</h3>
