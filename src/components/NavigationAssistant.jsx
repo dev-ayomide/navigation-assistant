@@ -994,7 +994,7 @@ const NavigationAssistant = () => {
   }, [isIOS, isSpeaking])
 
   return (
-    <div className="flex flex-col gap-6 max-w-3xl mx-auto">
+    <div className="flex flex-col gap-4 max-w-full mx-auto">
       {error && (
         <div className="flex flex-col gap-2 p-3 rounded-md bg-red-100 text-red-700">
           <div className="flex items-center gap-2">
@@ -1017,47 +1017,10 @@ const NavigationAssistant = () => {
             <span className="font-medium">Error</span>
           </div>
           <p>{error}</p>
-
-          {error.includes("Connection error") && (
-            <div className="mt-2 text-sm">
-              <p className="font-medium">Connection Troubleshooting:</p>
-              <ol className="list-decimal pl-5 mt-1 space-y-1">
-                <li>Make sure you have an active internet connection</li>
-                <li>Check if the API server is online</li>
-                <li>Try reloading the page</li>
-                <li>If the problem persists, the API server might be down</li>
-              </ol>
-            </div>
-          )}
-
-          {isAndroid && error.includes("Camera") && (
-            <div className="mt-2 text-sm">
-              <p className="font-medium">Android Chrome Troubleshooting:</p>
-              <ol className="list-decimal pl-5 mt-1 space-y-1">
-                <li>Tap the lock/info icon in the address bar</li>
-                <li>Select "Site settings"</li>
-                <li>Set Camera permission to "Allow"</li>
-                <li>Reload the page</li>
-                <li>If that doesn't work, try clearing Chrome's cache and data</li>
-              </ol>
-            </div>
-          )}
-
-          {isIOS && error.includes("Camera") && (
-            <div className="mt-2 text-sm">
-              <p className="font-medium">iOS Safari Troubleshooting:</p>
-              <ol className="list-decimal pl-5 mt-1 space-y-1">
-                <li>Close all Safari tabs and restart Safari</li>
-                <li>Go to Settings → Safari → Camera → Allow</li>
-                <li>Go to Settings → Privacy & Security → Camera → Enable for Safari</li>
-                <li>Try using Chrome for iOS instead</li>
-              </ol>
-            </div>
-          )}
         </div>
       )}
 
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <label className="relative inline-flex items-center cursor-pointer">
@@ -1066,65 +1029,13 @@ const NavigationAssistant = () => {
             </label>
             <span className="text-lg font-medium">{isActive ? "Active" : "Inactive"}</span>
           </div>
-
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 text-sm">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className={isConnected ? "text-emerald-500" : "text-red-500"}
-              >
-                {isConnected ? (
-                  <>
-                    <path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
-                    <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
-                  </>
-                ) : (
-                  <>
-                    <line x1="1" y1="1" x2="23" y2="23"></line>
-                    <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"></path>
-                    <path d="M5 12.55a10.94 10.94 0 0 0-3.17-2.39"></path>
-                    <path d="M10.71 5.05A16 16 0 0 0 1.42 9"></path>
-                    <path d="M22.58 9a15.91 15.91 0 0 0-4.7-2.88"></path>
-                    <path d="M8.53 16.11a6 6 0 0 0 6.95 0"></path>
-                    <line x1="12" y1="20" x2="12.01" y2="20"></line>
-                  </>
-                )}
-              </svg>
-              <span>{isConnected ? "Connected" : isReconnecting ? "Reconnecting..." : "Disconnected"}</span>
-            </div>
-
-            <div className="flex items-center gap-2 text-sm">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className={apiStatus === "Online" ? "text-emerald-500" : "text-red-500"}
-              >
-                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                <line x1="8" y1="21" x2="16" y2="21"></line>
-                <line x1="12" y1="17" x2="12" y2="21"></line>
-              </svg>
-              <span>API: {apiStatus}</span>
-            </div>
-          </div>
         </div>
+
+        {/* Larger camera view - taking up more screen space */}
         <div
-          className="relative aspect-video bg-black rounded-lg overflow-hidden"
-          onClick={handleVideoClick} // Add click handler for mobile
+          className="relative bg-black rounded-lg overflow-hidden w-full"
+          style={{ height: "75vh" }}
+          onClick={handleVideoClick}
         >
           <video
             ref={videoRef}
@@ -1204,6 +1115,7 @@ const NavigationAssistant = () => {
             </div>
           )}
         </div>
+
         <button
           className={`w-full py-4 text-lg font-medium rounded-md text-white transition-colors ${
             isActive ? "bg-red-500 hover:bg-red-600" : "bg-emerald-500 hover:bg-emerald-600"
@@ -1212,52 +1124,13 @@ const NavigationAssistant = () => {
         >
           {isActive ? "Stop Navigation Assistant" : "Start Navigation Assistant"}
         </button>
-        <button
-          className="w-full py-2 mt-2 text-sm font-medium rounded-md text-white bg-blue-500 hover:bg-blue-600"
-          onClick={() => {
-            initAudio()
-            speakMessage("This is a test of the speech system. If you can hear this, speech is working correctly.")
-          }}
-        >
-          Test Speech
-        </button>
-        <button
-          className="w-full py-2 mt-2 text-sm font-medium rounded-md text-white bg-purple-500 hover:bg-purple-600"
-          onClick={forceReload}
-        >
-          Reload Application
-        </button>
-        <div className="p-4 bg-slate-100 rounded-lg">
-          <h3 className="font-medium mb-1">Status:</h3>
-          <p className="mb-2">
-            {isSpeaking
-              ? "Speaking guidance..."
-              : isCapturingRef.current
-                ? "Capturing frames..."
-                : isConnected
-                  ? "Ready to capture"
-                  : isReconnecting
-                    ? "Attempting to reconnect..."
-                    : "Waiting for connection"}
-          </p>
-          <p className="mb-2 text-sm text-gray-500">
-            Device: {isIOS ? "iOS" : isAndroid ? "Android" : isMobile ? "Mobile" : "Laptop/Desktop"}
-            {isAndroid && " • Using back camera on Android"}
-            {isIOS && " • Using back camera on iOS"}
-            {!isMobile && " • Using front camera"}
-            {cameraPermissionRequested && !error && " • Camera permission granted"}
-          </p>
-          <p className="text-sm text-gray-500 mb-2">
-            API: {apiStatus} • {isConnected ? "Connected" : isReconnecting ? "Reconnecting..." : "Disconnected"}
-            {connectionAttempts > 0 && ` • Reconnection attempts: ${connectionAttempts}`}
-          </p>
-          {lastMessage && (
-            <>
-              <h3 className="font-medium mb-1">Last Guidance:</h3>
-              <p>{lastMessage}</p>
-            </>
-          )}
-        </div>
+
+        {lastMessage && (
+          <div className="p-4 bg-slate-100 rounded-lg">
+            <h3 className="font-medium mb-1">Last Guidance:</h3>
+            <p>{lastMessage}</p>
+          </div>
+        )}
       </div>
     </div>
   )
