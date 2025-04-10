@@ -16,6 +16,7 @@ const NavigationAssistant = () => {
   const [apiStatus, setApiStatus] = useState("Checking...")
   const [connectionAttempts, setConnectionAttempts] = useState(0)
   const [isReconnecting, setIsReconnecting] = useState(false)
+  const [speechStatus, setSpeechStatus] = useState("Not tested")
 
   const videoRef = useRef(null)
   const streamRef = useRef(null)
@@ -93,9 +94,7 @@ const NavigationAssistant = () => {
           rejectUnauthorized: false,
           withCredentials: false,
           autoConnect: true,
-          // Reduce the amount of data sent to improve mobile performance
           perMessageDeflate: true,
-          // Increase ping timeout for mobile networks
           pingTimeout: 30000,
           pingInterval: 25000,
         })
@@ -246,7 +245,7 @@ const NavigationAssistant = () => {
   // Detect device type
   useEffect(() => {
     const detectDevice = () => {
-      const userAgent = navigator.userAgent || window.opera
+      const userAgent = navigator.userAgent || navigator.vendor || window.opera || ""
 
       // Check for iOS devices
       const isIOSDevice =
@@ -277,10 +276,6 @@ const NavigationAssistant = () => {
             : isMobileDevice
               ? "Other mobile"
               : "desktop/laptop",
-        "- Touch points:",
-        navigator.maxTouchPoints,
-        "- Screen width:",
-        window.innerWidth,
       )
     }
 
@@ -359,7 +354,7 @@ const NavigationAssistant = () => {
     }
   }
 
-  // Replace the initCamera function with this improved version that better handles device-specific camera selection
+  // Initialize camera with better error handling
   const initCamera = async () => {
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -373,12 +368,11 @@ const NavigationAssistant = () => {
         console.log("Mobile device detected - requesting back camera")
 
         try {
-          // First try with exact environment (back camera) constraint
-          console.log("Attempting to access back camera with exact constraint")
+          // First try with environment (back camera) constraint
           const backCameraStream = await navigator.mediaDevices.getUserMedia({
             audio: false,
             video: {
-              facingMode: { exact: "environment" },
+              facingMode: "environment",
               width: { ideal: 1280 },
               height: { ideal: 720 },
             },
@@ -388,7 +382,7 @@ const NavigationAssistant = () => {
             videoRef.current.srcObject = backCameraStream
             streamRef.current = backCameraStream
             setError(null)
-            console.log("Back camera initialized successfully with exact constraint")
+            console.log("Back camera initialized successfully")
 
             try {
               await videoRef.current.play()
@@ -396,72 +390,39 @@ const NavigationAssistant = () => {
               console.error("Error playing back camera video:", playErr)
             }
           }
-          return // Exit early if successful
-        } catch (exactConstraintErr) {
-          // This error is expected on devices without a back camera
-          console.log("Could not access back camera with exact constraint, trying preferred constraint")
-
-          try {
-            // Try with preferred environment (back camera) constraint
-            const preferredBackCameraStream = await navigator.mediaDevices.getUserMedia({
-              audio: false,
-              video: {
-                facingMode: "environment", // Prefer back camera but don't require it
-                width: { ideal: 1280 },
-                height: { ideal: 720 },
-              },
-            })
-
-            if (videoRef.current) {
-              videoRef.current.srcObject = preferredBackCameraStream
-              streamRef.current = preferredBackCameraStream
-              setError(null)
-              console.log("Camera initialized with preferred back camera constraint")
-
-              try {
-                await videoRef.current.play()
-              } catch (playErr) {
-                console.error("Error playing camera video:", playErr)
-              }
-            }
-            return // Exit early if successful
-          } catch (preferredConstraintErr) {
-            console.log("Could not access camera with preferred constraint, trying basic access")
-          }
+          return
+        } catch (err) {
+          console.log("Could not access back camera, trying basic camera access")
         }
       } else {
-        // For laptops/desktops, directly use the front camera (typically the only camera)
-        console.log("Laptop/Desktop detected - requesting front camera")
+        // For laptops/desktops
+        console.log("Laptop/Desktop detected - requesting camera")
 
         try {
-          const frontCameraStream = await navigator.mediaDevices.getUserMedia({
+          const cameraStream = await navigator.mediaDevices.getUserMedia({
             audio: false,
-            video: {
-              facingMode: "user", // Front camera for laptops
-              width: { ideal: 1280 },
-              height: { ideal: 720 },
-            },
+            video: true,
           })
 
           if (videoRef.current) {
-            videoRef.current.srcObject = frontCameraStream
-            streamRef.current = frontCameraStream
+            videoRef.current.srcObject = cameraStream
+            streamRef.current = cameraStream
             setError(null)
-            console.log("Front camera initialized successfully")
+            console.log("Camera initialized successfully")
 
             try {
               await videoRef.current.play()
             } catch (playErr) {
-              console.error("Error playing front camera video:", playErr)
+              console.error("Error playing camera video:", playErr)
             }
           }
-          return // Exit early if successful
-        } catch (frontCameraErr) {
-          console.log("Could not access front camera with specific constraint, trying basic access")
+          return
+        } catch (err) {
+          console.error("Could not access camera:", err)
         }
       }
 
-      // Last resort: try with any camera (fallback for all devices)
+      // Last resort: try with any camera
       console.log("Trying basic camera access as last resort")
       const basicStream = await navigator.mediaDevices.getUserMedia({
         audio: false,
@@ -482,41 +443,12 @@ const NavigationAssistant = () => {
       }
     } catch (err) {
       console.error("Camera initialization error:", err)
-
-      let errorMessage = "Camera access error"
-
-      // Device-specific error handling
-      if (isAndroid) {
-        if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
-          errorMessage =
-            "Camera access denied. On Android Chrome, please tap the lock icon in the address bar, select 'Site settings', and enable camera access."
-        } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
-          errorMessage = "Camera is in use by another app. Please close any apps using the camera and try again."
-        } else {
-          errorMessage = "Android camera error. Please check your camera permissions in Chrome settings."
-        }
-      } else if (isIOS) {
-        if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
-          errorMessage = "Camera access denied. On iOS, go to Settings > Safari > Camera and ensure it's allowed."
-        } else {
-          errorMessage = "iOS camera error. Please check your camera permissions in Safari settings."
-        }
-      } else if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
-        errorMessage = "Camera access denied. Please enable camera permissions in your browser settings."
-      } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
-        errorMessage = "No camera found on this device."
-      } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
-        errorMessage = "Camera is already in use by another application."
-      } else if (err.name === "NotSupportedError") {
-        errorMessage = "Camera access is not supported by this browser."
-      }
-
-      setError(errorMessage)
+      setError("Camera access error. Please check your camera permissions.")
       setIsActive(false)
     }
   }
 
-  // Try to enumerate available devices to help with debugging
+  // List available devices for debugging
   const listAvailableDevices = async () => {
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
@@ -528,9 +460,6 @@ const NavigationAssistant = () => {
       const videoDevices = devices.filter((device) => device.kind === "videoinput")
 
       console.log("Available video devices:", videoDevices.length)
-      videoDevices.forEach((device, index) => {
-        console.log(`Video device ${index + 1}:`, device.label || `Camera ${index + 1}`)
-      })
     } catch (err) {
       console.error("Error listing devices:", err)
     }
@@ -538,12 +467,7 @@ const NavigationAssistant = () => {
 
   const startCaptureCycle = () => {
     if (!isActive || !isConnected || isSpeaking || isCapturingRef.current) {
-      console.log("Not starting capture cycle:", {
-        isActive,
-        isConnected,
-        isSpeaking,
-        isCapturing: isCapturingRef.current,
-      })
+      console.log("Not starting capture cycle")
       return
     }
 
@@ -564,242 +488,92 @@ const NavigationAssistant = () => {
     captureAndSendFiveFrames(video)
   }
 
-  // Replace the current speakMessage function with this improved version
+  // Speech synthesis with better error handling
   const speakMessage = (message) => {
     if (!message) return
 
     console.log("Attempting to speak:", message)
 
-    // Cancel any ongoing speech
-    window.speechSynthesis.cancel()
+    try {
+      // Cancel any ongoing speech
+      window.speechSynthesis.cancel()
 
-    // Force set speaking state
-    setIsSpeaking(true)
+      // Force set speaking state
+      setIsSpeaking(true)
 
-    // Create a new utterance
-    const utterance = new SpeechSynthesisUtterance(message)
-    utteranceRef.current = utterance
+      // Create a new utterance
+      const utterance = new SpeechSynthesisUtterance(message)
+      utteranceRef.current = utterance
 
-    // Set properties for better speech on mobile
-    utterance.rate = isIOS ? 1.0 : 1.0
-    utterance.pitch = 1.0
-    utterance.volume = 1.0 // Maximum volume
+      // Set properties for better speech
+      utterance.rate = isIOS ? 1.0 : 1.0
+      utterance.pitch = 1.0
+      utterance.volume = 1.0
 
-    // Get available voices
-    const voices = window.speechSynthesis.getVoices()
+      // Get available voices
+      const voices = window.speechSynthesis.getVoices()
 
-    // Mobile-specific voice selection
-    if (isIOS || isAndroid) {
-      // For iOS, try to find a specific voice that works well
-      if (isIOS && voices.length > 0) {
-        const iosVoice = voices.find(
-          (voice) =>
-            voice.name.includes("Samantha") ||
-            voice.name.includes("Karen") ||
-            (voice.lang === "en-US" && voice.localService === true),
+      // Try to select an appropriate voice
+      if (voices && voices.length > 0) {
+        let selectedVoice = null
+
+        // Try to find an English voice
+        selectedVoice = voices.find(
+          (voice) => voice.lang.includes("en-US") || voice.lang.includes("en-GB") || voice.lang.includes("en"),
         )
 
-        if (iosVoice) {
-          console.log("Selected iOS voice:", iosVoice.name)
-          utterance.voice = iosVoice
+        if (selectedVoice) {
+          utterance.voice = selectedVoice
+          console.log("Selected voice:", selectedVoice.name)
         }
       }
-      // For Android, prefer Google voices
-      else if (isAndroid && voices.length > 0) {
-        const androidVoice = voices.find(
-          (voice) =>
-            (voice.name.includes("Google") && voice.lang.includes("en")) ||
-            voice.name.includes("English United States"),
-        )
 
-        if (androidVoice) {
-          console.log("Selected Android voice:", androidVoice.name)
-          utterance.voice = androidVoice
-        }
+      // Handle speech completion
+      utterance.onend = () => {
+        console.log("Speech completed")
+        setIsSpeaking(false)
+        // Wait a short delay before starting next capture cycle
+        setTimeout(startCaptureCycle, 500)
       }
-    }
 
-    // Fallback to any English voice if no platform-specific voice was found
-    if (!utterance.voice && voices.length > 0) {
-      const englishVoice = voices.find(
-        (voice) => voice.lang.includes("en-US") || voice.lang.includes("en-GB") || voice.lang.includes("en"),
-      )
-
-      if (englishVoice) {
-        utterance.voice = englishVoice
-        console.log("Selected fallback English voice:", englishVoice.name)
-      } else {
-        // Just use the first available voice
-        utterance.voice = voices[0]
-        console.log("Using default voice:", voices[0].name)
-      }
-    }
-
-    // Handle speech completion
-    utterance.onend = () => {
-      console.log("Speech completed")
-      setIsSpeaking(false)
-      // Wait a short delay before starting next capture cycle
-      setTimeout(startCaptureCycle, 500)
-    }
-
-    utterance.onerror = (event) => {
-      console.error("Speech synthesis error:", event)
-      setIsSpeaking(false)
-      setTimeout(startCaptureCycle, 500)
-    }
-
-    // Mobile-specific speech handling
-    if (isIOS || isAndroid) {
-      try {
-        // First initialize audio context to unlock audio on mobile
-        initAudio()
-
-        // Speak the utterance
-        speechSynthesis.speak(utterance)
-
-        // iOS-specific workaround
-        if (isIOS) {
-          // This pause and resume trick helps on iOS
-          setTimeout(() => {
-            speechSynthesis.pause()
-            speechSynthesis.resume()
-          }, 100)
-
-          // iOS sometimes needs multiple resume attempts
-          setTimeout(() => {
-            if (speechSynthesis.paused) {
-              speechSynthesis.resume()
-            }
-          }, 500)
-        }
-
-        // Android-specific workaround
-        if (isAndroid) {
-          // Some Android devices need a kick to start speaking
-          setTimeout(() => {
-            if (speechSynthesis.paused) {
-              speechSynthesis.resume()
-            }
-          }, 250)
-        }
-      } catch (err) {
-        console.error("Mobile speech error:", err)
+      utterance.onerror = (event) => {
+        console.error("Speech synthesis error:", event)
         setIsSpeaking(false)
         setTimeout(startCaptureCycle, 500)
       }
-    } else {
-      // Desktop speech handling
+
+      // Speak the utterance
       speechSynthesis.speak(utterance)
-    }
 
-    // Set a timeout to prevent hanging if speech doesn't complete
-    const timeoutDuration = Math.max(5000, message.length * 100)
-    setTimeout(() => {
-      if (isSpeaking && utteranceRef.current === utterance) {
-        console.warn("Speech timeout reached, forcing next cycle")
-        setIsSpeaking(false)
-        startCaptureCycle()
+      // iOS-specific workaround
+      if (isIOS) {
+        setTimeout(() => {
+          try {
+            speechSynthesis.pause()
+            speechSynthesis.resume()
+          } catch (e) {
+            console.error("iOS speech workaround error:", e)
+          }
+        }, 100)
       }
-    }, timeoutDuration)
-  }
 
-  // Add this function to force reload the page - useful for mobile troubleshooting
-  const forceReload = () => {
-    window.location.reload()
-  }
-
-  // Add these helper functions after the speakMessage function
-  const selectVoice = (utterance, voices) => {
-    // First try to find a good English voice
-    let selectedVoice = null
-
-    // For iOS, try to find a specific voice that works well
-    if (isIOS) {
-      selectedVoice = voices.find(
-        (voice) =>
-          voice.name.includes("Samantha") ||
-          voice.name.includes("Karen") ||
-          (voice.lang === "en-US" && voice.localService === true),
-      )
-    }
-    // For Android, prefer Google voices
-    else if (isAndroid) {
-      selectedVoice = voices.find(
-        (voice) =>
-          (voice.name.includes("Google") && voice.lang.includes("en")) || voice.name.includes("English United States"),
-      )
-    }
-
-    // Fallback to any English voice
-    if (!selectedVoice) {
-      selectedVoice = voices.find(
-        (voice) => voice.lang.includes("en-US") || voice.lang.includes("en-GB") || voice.lang.includes("en"),
-      )
-    }
-
-    if (selectedVoice) {
-      console.log("Selected voice:", selectedVoice.name)
-      utterance.voice = selectedVoice
-    } else if (voices.length > 0) {
-      // Just use the first available voice if no English voice is found
-      console.log("Using default voice:", voices[0].name)
-      utterance.voice = voices[0]
-    }
-  }
-
-  const continueSpeech = (utterance, message) => {
-    // Set properties for better speech on mobile
-    utterance.rate = isIOS ? 1.1 : 1.0 // Slightly faster on iOS
-    utterance.pitch = 1.0
-    utterance.volume = 1.0 // Maximum volume
-
-    // Handle speech completion
-    utterance.onend = () => {
-      console.log("Speech completed")
-      setIsSpeaking(false)
-      // Wait a short delay before starting next capture cycle
+      // Set a timeout to prevent hanging if speech doesn't complete
+      const timeoutDuration = Math.max(5000, message.length * 100)
       setTimeout(() => {
-        console.log("Starting next capture cycle after speech")
-        startCaptureCycle()
-      }, 500)
-    }
-
-    utterance.onerror = (event) => {
-      console.error("Speech synthesis error:", event)
+        if (isSpeaking) {
+          console.warn("Speech timeout reached, forcing next cycle")
+          setIsSpeaking(false)
+          startCaptureCycle()
+        }
+      }, timeoutDuration)
+    } catch (err) {
+      console.error("Speech error:", err)
       setIsSpeaking(false)
       setTimeout(startCaptureCycle, 500)
     }
-
-    // For iOS, we need to use a workaround to make speech work reliably
-    if (isIOS) {
-      // iOS requires speech to be triggered within a user interaction
-      // and sometimes needs a "kick" to start properly
-      speechSynthesis.speak(utterance)
-
-      // This pause and resume trick helps on iOS
-      setTimeout(() => {
-        speechSynthesis.pause()
-        speechSynthesis.resume()
-      }, 100)
-    } else {
-      // Normal speech for other platforms
-      speechSynthesis.speak(utterance)
-    }
-
-    // Set a timeout to prevent hanging if speech doesn't complete
-    const timeoutDuration = Math.max(5000, message.length * 100)
-    setTimeout(() => {
-      if (isSpeaking && utteranceRef.current === utterance) {
-        console.warn("Speech timeout reached, forcing next cycle")
-        setIsSpeaking(false)
-        startCaptureCycle()
-      }
-    }, timeoutDuration)
   }
 
-  // Add this function to manually trigger audio context initialization
-  // (helps with mobile audio restrictions)
+  // Initialize audio context (helps with mobile audio restrictions)
   const initAudio = () => {
     try {
       // Create a short audio context to "unlock" audio on iOS/Android
@@ -810,13 +584,13 @@ const NavigationAssistant = () => {
         // Create a short silent sound
         const oscillator = audioCtx.createOscillator()
         const gainNode = audioCtx.createGain()
-        gainNode.gain.value = 0.01 // Very quiet but not silent (important for iOS)
+        gainNode.gain.value = 0.01 // Very quiet but not silent
         oscillator.connect(gainNode)
         gainNode.connect(audioCtx.destination)
 
         // Play for a very short time
         oscillator.start(audioCtx.currentTime)
-        oscillator.stop(audioCtx.currentTime + 0.05) // Slightly longer to ensure it plays
+        oscillator.stop(audioCtx.currentTime + 0.05)
 
         console.log("Audio context initialized")
 
@@ -830,7 +604,7 @@ const NavigationAssistant = () => {
     }
   }
 
-  // Modify the toggleActive function to include audio initialization
+  // Toggle active state
   const toggleActive = () => {
     const newState = !isActive
     setIsActive(newState)
@@ -843,17 +617,6 @@ const NavigationAssistant = () => {
       if (window.speechSynthesis) {
         // Force load voices
         window.speechSynthesis.getVoices()
-
-        // Speak a test message to initialize the speech system on mobile
-        if (isIOS || isAndroid) {
-          // This needs to happen in response to a user action (like this button press)
-          const initUtterance = new SpeechSynthesisUtterance("Starting")
-          initUtterance.volume = 1.0
-          initUtterance.onend = () => {
-            console.log("Initial speech completed - speech system initialized")
-          }
-          window.speechSynthesis.speak(initUtterance)
-        }
       }
 
       // Reset connection attempts
@@ -956,14 +719,7 @@ const NavigationAssistant = () => {
     console.log("Manual video restart attempted")
 
     if (isIOS || isAndroid) {
-      // For mobile, we might need to completely reinitialize
-      if (!streamRef.current && isActive) {
-        console.log("Attempting to reinitialize camera on tap")
-        initCamera()
-        return
-      }
-
-      // Try to play the video
+      // For mobile, try to play the video
       videoRef.current.play().catch((e) => {
         console.error("Error playing video after manual restart:", e)
 
@@ -992,122 +748,71 @@ const NavigationAssistant = () => {
     }
   }
 
-  // Add a useEffect to load voices as soon as possible
-  useEffect(() => {
-    // Load voices as early as possible
-    const loadVoices = () => {
-      const voices = window.speechSynthesis.getVoices()
-      console.log("Pre-loaded voices:", voices.length)
-
-      // On iOS, we need to "warm up" the speech synthesis
-      if (isIOS && voices.length > 0) {
-        try {
-          // Create a silent utterance to initialize the speech system
-          const warmupUtterance = new SpeechSynthesisUtterance("")
-          warmupUtterance.volume = 0 // Silent
-          warmupUtterance.rate = 1
-          speechSynthesis.speak(warmupUtterance)
-          console.log("Warmed up speech synthesis on iOS")
-        } catch (e) {
-          console.error("Error warming up speech:", e)
-        }
-      }
-    }
-
-    // Initialize speech synthesis
-    if (window.speechSynthesis) {
-      loadVoices()
-
-      if (speechSynthesis.onvoiceschanged !== undefined) {
-        speechSynthesis.onvoiceschanged = loadVoices
-      }
-
-      // For iOS, we need to periodically "ping" the speech synthesis
-      // to prevent it from going to sleep
-      let speechKeepAliveInterval
-
-      if (isIOS) {
-        speechKeepAliveInterval = setInterval(() => {
-          if (!isSpeaking) {
-            speechSynthesis.cancel() // This helps keep the system active
-          }
-        }, 5000)
-      }
-
-      return () => {
-        if (speechSynthesis.onvoiceschanged !== undefined) {
-          speechSynthesis.onvoiceschanged = null
-        }
-
-        if (speechKeepAliveInterval) {
-          clearInterval(speechKeepAliveInterval)
-        }
-      }
-    }
-  }, [isIOS, isSpeaking])
-
-  // Initialize speech synthesis on component mount
-  useEffect(() => {
-    if (window.speechSynthesis) {
-      // Force load voices
-      window.speechSynthesis.getVoices()
-
-      // Add voice changed event listener
-      if (speechSynthesis.onvoiceschanged !== undefined) {
-        speechSynthesis.onvoiceschanged = () => {
-          console.log("Voices loaded:", window.speechSynthesis.getVoices().length)
-        }
-      }
-    }
-  }, [])
-
-  // Add this function to handle the test speech button click
+  // Test speech function
   const handleTestSpeech = () => {
-    // Initialize audio context first (important for mobile)
-    initAudio()
+    setSpeechStatus("Testing...")
 
-    // For mobile, we need to speak immediately after user interaction
-    if (isIOS || isAndroid) {
+    try {
+      // Initialize audio context first (important for mobile)
+      initAudio()
+
+      // Cancel any ongoing speech
+      window.speechSynthesis.cancel()
+
       const testMessage = "This is a test of the speech system. If you can hear this, speech is working correctly."
+
+      // Create a new utterance
       const testUtterance = new SpeechSynthesisUtterance(testMessage)
       testUtterance.volume = 1.0
       testUtterance.rate = 1.0
+      testUtterance.pitch = 1.0
 
-      // Try to select a voice that works well on mobile
+      // Set up event handlers
+      testUtterance.onstart = () => {
+        console.log("Speech started")
+        setSpeechStatus("Speaking...")
+      }
+
+      testUtterance.onend = () => {
+        console.log("Speech ended successfully")
+        setSpeechStatus("Success! Speech is working.")
+      }
+
+      testUtterance.onerror = (event) => {
+        console.error("Speech error:", event)
+        setSpeechStatus("Error: Speech failed")
+      }
+
+      // Try to select a voice
       const voices = window.speechSynthesis.getVoices()
       if (voices && voices.length > 0) {
-        if (isIOS) {
-          const iosVoice = voices.find(
-            (voice) =>
-              voice.name.includes("Samantha") ||
-              voice.name.includes("Karen") ||
-              (voice.lang === "en-US" && voice.localService === true),
-          )
-          if (iosVoice) testUtterance.voice = iosVoice
-        } else if (isAndroid) {
-          const androidVoice = voices.find(
-            (voice) =>
-              (voice.name.includes("Google") && voice.lang.includes("en")) ||
-              voice.name.includes("English United States"),
-          )
-          if (androidVoice) testUtterance.voice = androidVoice
+        // Try to find an English voice
+        const englishVoice = voices.find(
+          (voice) => voice.lang.includes("en-US") || voice.lang.includes("en-GB") || voice.lang.includes("en"),
+        )
+
+        if (englishVoice) {
+          testUtterance.voice = englishVoice
         }
       }
 
-      // Speak directly without using our main function
-      window.speechSynthesis.cancel() // Cancel any ongoing speech
+      // Speak the utterance
       window.speechSynthesis.speak(testUtterance)
 
       // iOS-specific workaround
       if (isIOS) {
         setTimeout(() => {
-          window.speechSynthesis.pause()
-          window.speechSynthesis.resume()
+          try {
+            window.speechSynthesis.pause()
+            window.speechSynthesis.resume()
+          } catch (e) {
+            console.error("iOS speech workaround error:", e)
+          }
         }, 100)
       }
-    } else {
-      // For desktop, use our regular function
-      speakMessage("This is a test of the speech system. If you can hear this, speech is working correctly.")
+    } catch (err) {
+      console.error("Test speech error:", err)
+      setSpeechStatus("Error: " + (err.message || "Unknown error"))
     }
   }
 
@@ -1243,12 +948,36 @@ const NavigationAssistant = () => {
           {isActive ? "Stop Navigation Assistant" : "Start Navigation Assistant"}
         </button>
 
-        <button
-          className="w-full py-3 mt-2 text-base font-medium rounded-md text-white bg-blue-500 hover:bg-blue-600"
-          onClick={handleTestSpeech}
-        >
-          Test Speech
-        </button>
+        {/* Enhanced test speech section */}
+        <div className="p-4 bg-blue-50 rounded-lg">
+          <h3 className="font-medium mb-2">Speech Test</h3>
+          <p className="text-sm mb-3">
+            If the app isn't speaking, tap the button below to test speech functionality. This will help diagnose any
+            issues with your device's speech capabilities.
+          </p>
+          <div className="flex flex-col gap-2">
+            <button
+              className="w-full py-3 text-base font-medium rounded-md text-white bg-blue-500 hover:bg-blue-600 active:bg-blue-700"
+              onClick={handleTestSpeech}
+            >
+              Test Speech Now
+            </button>
+            <div className="text-sm mt-1">
+              Status:{" "}
+              <span
+                className={
+                  speechStatus.includes("Success")
+                    ? "text-green-600 font-medium"
+                    : speechStatus.includes("Error")
+                      ? "text-red-600 font-medium"
+                      : "text-blue-600 font-medium"
+                }
+              >
+                {speechStatus}
+              </span>
+            </div>
+          </div>
+        </div>
 
         {lastMessage && (
           <div className="p-4 bg-slate-100 rounded-lg">
@@ -1260,3 +989,5 @@ const NavigationAssistant = () => {
     </div>
   )
 }
+
+export default NavigationAssistant
