@@ -14,12 +14,15 @@ const NavigationAssistant = () => {
   const [isAndroid, setIsAndroid] = useState(false)
   const [cameraPermissionRequested, setCameraPermissionRequested] = useState(false)
   const [apiStatus, setApiStatus] = useState("Checking...")
+  const [connectionAttempts, setConnectionAttempts] = useState(0)
+  const [isReconnecting, setIsReconnecting] = useState(false)
 
   const videoRef = useRef(null)
   const streamRef = useRef(null)
   const socketRef = useRef(null)
   const isCapturingRef = useRef(false)
   const utteranceRef = useRef(null)
+  const reconnectTimeoutRef = useRef(null)
 
   // API endpoint configuration
   const API_ENDPOINT = "https://see-for-me-api-production.up.railway.app"
@@ -56,76 +59,189 @@ const NavigationAssistant = () => {
     checkApiStatus()
   }, [])
 
-  // Socket.IO connection - connect to backend API
+  // Socket.IO connection - connect to backend API with improved stability for mobile
   useEffect(() => {
     if (!isActive) return
+
+    // Clear any existing reconnection timeout
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current)
+      reconnectTimeoutRef.current = null
+    }
 
     // Disconnect any existing socket
     if (socketRef.current) {
       socketRef.current.disconnect()
+      socketRef.current = null
     }
 
-    try {
-      console.log(`Connecting to API at: ${API_ENDPOINT}`)
+    const connectSocket = () => {
+      try {
+        setIsReconnecting(true)
+        console.log(`Connecting to API at: ${API_ENDPOINT} (Attempt ${connectionAttempts + 1})`)
 
-      // Create socket with explicit options for better compatibility
-      const socket = io(API_ENDPOINT, {
-        reconnectionAttempts: 5,
-        timeout: 10000,
-        transports: ["websocket", "polling"],
-        upgrade: true,
-        forceNew: true,
-        secure: true,
-        rejectUnauthorized: false,
-        withCredentials: false,
-      })
+        // Create socket with optimized options for mobile stability
+        const socket = io(API_ENDPOINT, {
+          reconnectionAttempts: 10,
+          reconnectionDelay: 1000,
+          reconnectionDelayMax: 5000,
+          timeout: 20000,
+          transports: ["websocket", "polling"],
+          upgrade: true,
+          forceNew: true,
+          secure: true,
+          rejectUnauthorized: false,
+          withCredentials: false,
+          autoConnect: true,
+          // Reduce the amount of data sent to improve mobile performance
+          perMessageDeflate: true,
+          // Increase ping timeout for mobile networks
+          pingTimeout: 30000,
+          pingInterval: 25000,
+        })
 
-      socketRef.current = socket
+        socketRef.current = socket
 
-      socket.on("connect", () => {
-        console.log("Socket.IO connected successfully to API!")
-        setIsConnected(true)
-        setError(null)
-      })
+        socket.on("connect", () => {
+          console.log("Socket.IO connected successfully to API!")
+          setIsConnected(true)
+          setIsReconnecting(false)
+          setConnectionAttempts(0)
+          setError(null)
+        })
 
-      socket.on("disconnect", () => {
-        console.log("Socket.IO disconnected from API")
-        setIsConnected(false)
-      })
+        socket.on("disconnect", (reason) => {
+          console.log("Socket.IO disconnected from API. Reason:", reason)
+          setIsConnected(false)
 
-      socket.on("connect_error", (err) => {
-        console.error("Socket.IO connection error:", err)
-        setError(`Connection error: Cannot connect to API server. Please check your internet connection.`)
-        setIsConnected(false)
-      })
+          // Don't attempt to reconnect if we're not active anymore
+          if (!isActive) return
 
-      socket.on("server_response", (data) => {
-        console.log("Received API response:", data)
-        const message = data.message || "No guidance available"
-        setLastMessage(message)
-        speakMessage(message)
-      })
+          // If it's a server disconnect or transport close, try to reconnect
+          if (reason === "io server disconnect" || reason === "transport close") {
+            setIsReconnecting(true)
 
-      // Set a timeout for connection
-      const connectionTimeout = setTimeout(() => {
-        if (socket.connected) return
-        console.error("Socket.IO connection timeout")
-        setError(
-          `Connection timeout: Could not connect to API server within 10 seconds. Please check your internet connection.`,
-        )
-      }, 10000)
+            // Increment connection attempts
+            setConnectionAttempts((prev) => prev + 1)
 
-      return () => {
-        clearTimeout(connectionTimeout)
-        socket.disconnect()
+            // If we've tried too many times, show an error
+            if (connectionAttempts >= 5) {
+              setError("Connection unstable. Please check your internet connection and try again.")
+              setIsReconnecting(false)
+              return
+            }
+
+            // Try to reconnect after a delay
+            reconnectTimeoutRef.current = setTimeout(() => {
+              console.log("Attempting to reconnect...")
+              if (socketRef.current) {
+                socketRef.current.connect()
+              }
+            }, 3000)
+          }
+        })
+
+        socket.on("connect_error", (err) => {
+          console.error("Socket.IO connection error:", err)
+          setIsConnected(false)
+          setIsReconnecting(true)
+
+          // Increment connection attempts
+          setConnectionAttempts((prev) => prev + 1)
+
+          // If we've tried too many times, show an error
+          if (connectionAttempts >= 5) {
+            setError(`Connection error: Cannot connect to API server. Please check your internet connection.`)
+            setIsReconnecting(false)
+            return
+          }
+
+          // Try to reconnect after a delay
+          reconnectTimeoutRef.current = setTimeout(() => {
+            console.log("Attempting to reconnect after error...")
+            connectSocket()
+          }, 3000)
+        })
+
+        socket.on("server_response", (data) => {
+          console.log("Received API response:", data)
+          const message = data.message || "No guidance available"
+          setLastMessage(message)
+          speakMessage(message)
+        })
+
+        // Set a timeout for initial connection
+        const connectionTimeout = setTimeout(() => {
+          if (socket.connected) return
+          console.error("Socket.IO initial connection timeout")
+
+          // If we're not connected after the timeout, try to reconnect
+          setConnectionAttempts((prev) => prev + 1)
+
+          if (connectionAttempts >= 5) {
+            setError(`Connection timeout: Could not connect to API server. Please check your internet connection.`)
+            setIsReconnecting(false)
+            return
+          }
+
+          setIsReconnecting(true)
+          connectSocket()
+        }, 10000)
+
+        return () => {
+          clearTimeout(connectionTimeout)
+        }
+      } catch (err) {
+        console.error("Error creating Socket.IO connection:", err)
+        setError(`Connection error: ${err.message}. Please check your internet connection.`)
+        setIsReconnecting(false)
+      }
+    }
+
+    connectSocket()
+
+    // Cleanup function
+    return () => {
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
+        reconnectTimeoutRef.current = null
+      }
+
+      if (socketRef.current) {
+        socketRef.current.disconnect()
         socketRef.current = null
       }
-    } catch (err) {
-      console.error("Error creating Socket.IO connection:", err)
-      setError(`Connection error: ${err.message}. Please check your internet connection.`)
-      return () => {}
+
+      setIsReconnecting(false)
     }
-  }, [isActive])
+  }, [isActive, connectionAttempts])
+
+  // Add network status monitoring for mobile devices
+  useEffect(() => {
+    const handleOnline = () => {
+      console.log("Network is online")
+      if (isActive && !isConnected) {
+        // If we're active but not connected, try to reconnect
+        if (socketRef.current) {
+          socketRef.current.connect()
+        }
+      }
+    }
+
+    const handleOffline = () => {
+      console.log("Network is offline")
+      setError("Network connection lost. Please check your internet connection.")
+      setIsConnected(false)
+    }
+
+    window.addEventListener("online", handleOnline)
+    window.addEventListener("offline", handleOffline)
+
+    return () => {
+      window.removeEventListener("online", handleOnline)
+      window.removeEventListener("offline", handleOffline)
+    }
+  }, [isActive, isConnected])
 
   // Detect device type
   useEffect(() => {
@@ -178,13 +294,16 @@ const NavigationAssistant = () => {
     }
   }, [])
 
-  // Capture frame function
+  // Capture frame function - optimized for mobile performance
   async function captureFrame(videoElement) {
     return new Promise((resolve) => {
       const canvas = document.createElement("canvas")
       const ctx = canvas.getContext("2d")
-      canvas.width = videoElement.videoWidth
-      canvas.height = videoElement.videoHeight
+
+      // Use smaller dimensions on mobile for better performance
+      const scaleFactor = isMobile ? 0.5 : 1.0
+      canvas.width = videoElement.videoWidth * scaleFactor
+      canvas.height = videoElement.videoHeight * scaleFactor
 
       ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height)
 
@@ -195,12 +314,12 @@ const NavigationAssistant = () => {
           reader.readAsArrayBuffer(blob)
         },
         "image/webp",
-        0.8,
-      ) // Use 80% quality for better performance
+        isMobile ? 0.7 : 0.8, // Lower quality on mobile for better performance
+      )
     })
   }
 
-  // Capture and send five frames
+  // Capture and send frames - optimized for mobile
   async function captureAndSendFiveFrames(videoElement) {
     try {
       if (isSpeaking) {
@@ -212,10 +331,14 @@ const NavigationAssistant = () => {
       console.log("Starting to capture frames")
 
       const frames = []
-      for (let i = 0; i < 5; i++) {
+      // Capture fewer frames on mobile for better performance
+      const frameCount = isMobile ? 3 : 5
+
+      for (let i = 0; i < frameCount; i++) {
         const frame = await captureFrame(videoElement)
         frames.push(frame)
-        await new Promise((res) => setTimeout(res, 300))
+        // Longer delay between frames on mobile
+        await new Promise((res) => setTimeout(res, isMobile ? 400 : 300))
       }
 
       console.log("Sending batch of", frames.length, "frames to API")
@@ -223,6 +346,10 @@ const NavigationAssistant = () => {
         socketRef.current.emit("send_frames_batch", { frames: frames })
       } else {
         console.error("Socket not connected, can't send frames")
+        // Try to reconnect if we're not connected
+        if (isActive && !isConnected && !isReconnecting) {
+          setConnectionAttempts((prev) => prev + 1)
+        }
       }
     } catch (err) {
       console.error("Error capturing frames:", err)
@@ -676,6 +803,10 @@ const NavigationAssistant = () => {
       // Initialize audio context to help with mobile audio restrictions
       initAudio()
 
+      // Reset connection attempts
+      setConnectionAttempts(0)
+      setIsReconnecting(false)
+
       // Check API status before proceeding
       const checkApiStatus = async () => {
         try {
@@ -715,11 +846,23 @@ const NavigationAssistant = () => {
         streamRef.current = null
       }
 
+      if (socketRef.current) {
+        socketRef.current.disconnect()
+        socketRef.current = null
+      }
+
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
+        reconnectTimeoutRef.current = null
+      }
+
       if (window.speechSynthesis) {
         window.speechSynthesis.cancel()
       }
 
       setIsSpeaking(false)
+      setIsReconnecting(false)
+      setConnectionAttempts(0)
     }
   }
 
@@ -739,7 +882,14 @@ const NavigationAssistant = () => {
       }
       if (socketRef.current) {
         socketRef.current.disconnect()
+        socketRef.current = null
       }
+
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
+        reconnectTimeoutRef.current = null
+      }
+
       if (window.speechSynthesis) {
         window.speechSynthesis.cancel()
       }
@@ -790,7 +940,6 @@ const NavigationAssistant = () => {
   }
 
   // Add a useEffect to load voices as soon as possible
-  // Add this after your other useEffects
   useEffect(() => {
     // Load voices as early as possible
     const loadVoices = () => {
@@ -949,7 +1098,7 @@ const NavigationAssistant = () => {
                   </>
                 )}
               </svg>
-              <span>{isConnected ? "Connected" : "Disconnected"}</span>
+              <span>{isConnected ? "Connected" : isReconnecting ? "Reconnecting..." : "Disconnected"}</span>
             </div>
 
             <div className="flex items-center gap-2 text-sm">
@@ -1078,7 +1227,6 @@ const NavigationAssistant = () => {
         >
           Reload Application
         </button>
-        // Add a device info section to the status display to help with debugging
         <div className="p-4 bg-slate-100 rounded-lg">
           <h3 className="font-medium mb-1">Status:</h3>
           <p className="mb-2">
@@ -1088,7 +1236,9 @@ const NavigationAssistant = () => {
                 ? "Capturing frames..."
                 : isConnected
                   ? "Ready to capture"
-                  : "Waiting for connection"}
+                  : isReconnecting
+                    ? "Attempting to reconnect..."
+                    : "Waiting for connection"}
           </p>
           <p className="mb-2 text-sm text-gray-500">
             Device: {isIOS ? "iOS" : isAndroid ? "Android" : isMobile ? "Mobile" : "Laptop/Desktop"}
@@ -1098,7 +1248,8 @@ const NavigationAssistant = () => {
             {cameraPermissionRequested && !error && " • Camera permission granted"}
           </p>
           <p className="text-sm text-gray-500 mb-2">
-            API: {apiStatus} • {isConnected ? "Connected" : "Disconnected"}
+            API: {apiStatus} • {isConnected ? "Connected" : isReconnecting ? "Reconnecting..." : "Disconnected"}
+            {connectionAttempts > 0 && ` • Reconnection attempts: ${connectionAttempts}`}
           </p>
           {lastMessage && (
             <>
