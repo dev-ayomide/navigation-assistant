@@ -131,15 +131,22 @@ const NavigationAssistant = () => {
   useEffect(() => {
     const detectDevice = () => {
       const userAgent = navigator.userAgent || window.opera
+
+      // Check for iOS devices
       const isIOSDevice =
         /iphone|ipad|ipod/i.test(userAgent.toLowerCase()) ||
         (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+
+      // Check for Android devices
       const isAndroidDevice = /android/i.test(userAgent.toLowerCase())
+
+      // More comprehensive mobile detection
       const isMobileDevice =
         isIOSDevice ||
         isAndroidDevice ||
         /webos|blackberry|iemobile|opera mini/i.test(userAgent.toLowerCase()) ||
-        "ontouchstart" in window
+        (window.innerWidth <= 768 && "ontouchstart" in window) ||
+        navigator.maxTouchPoints > 1
 
       setIsMobile(isMobileDevice)
       setIsIOS(isIOSDevice)
@@ -147,11 +154,28 @@ const NavigationAssistant = () => {
 
       console.log(
         "Device detected as:",
-        isIOSDevice ? "iOS mobile" : isAndroidDevice ? "Android mobile" : isMobileDevice ? "Other mobile" : "desktop",
+        isIOSDevice
+          ? "iOS mobile"
+          : isAndroidDevice
+            ? "Android mobile"
+            : isMobileDevice
+              ? "Other mobile"
+              : "desktop/laptop",
+        "- Touch points:",
+        navigator.maxTouchPoints,
+        "- Screen width:",
+        window.innerWidth,
       )
     }
 
     detectDevice()
+
+    // Also detect on resize in case of orientation changes
+    window.addEventListener("resize", detectDevice)
+
+    return () => {
+      window.removeEventListener("resize", detectDevice)
+    }
   }, [])
 
   // Capture frame function
@@ -208,7 +232,7 @@ const NavigationAssistant = () => {
     }
   }
 
-  // Initialize camera with simplified approach for Android
+  // Replace the initCamera function with this improved version that better handles device-specific camera selection
   const initCamera = async () => {
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -217,13 +241,13 @@ const NavigationAssistant = () => {
 
       setCameraPermissionRequested(true)
 
-      // For mobile devices, use a more direct approach to get the back camera
+      // Different camera initialization based on device type
       if (isMobile) {
-        console.log("Mobile device detected - using direct back camera request")
+        console.log("Mobile device detected - requesting back camera")
 
         try {
-          // Explicitly request the back camera first
-          console.log("Requesting back camera access")
+          // First try with exact environment (back camera) constraint
+          console.log("Attempting to access back camera with exact constraint")
           const backCameraStream = await navigator.mediaDevices.getUserMedia({
             audio: false,
             video: {
@@ -237,92 +261,96 @@ const NavigationAssistant = () => {
             videoRef.current.srcObject = backCameraStream
             streamRef.current = backCameraStream
             setError(null)
+            console.log("Back camera initialized successfully with exact constraint")
 
             try {
               await videoRef.current.play()
-              console.log("Back camera video started successfully")
-              return // Exit early if successful
             } catch (playErr) {
               console.error("Error playing back camera video:", playErr)
-              // Continue to fallback
             }
           }
-        } catch (backCameraErr) {
-          console.warn("Could not access back camera with exact constraint, trying fallback", backCameraErr)
-          // Continue to fallback approach
-        }
+          return // Exit early if successful
+        } catch (exactConstraintErr) {
+          // This error is expected on devices without a back camera
+          console.log("Could not access back camera with exact constraint, trying preferred constraint")
 
-        // Fallback to a more permissive approach
+          try {
+            // Try with preferred environment (back camera) constraint
+            const preferredBackCameraStream = await navigator.mediaDevices.getUserMedia({
+              audio: false,
+              video: {
+                facingMode: "environment", // Prefer back camera but don't require it
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+              },
+            })
+
+            if (videoRef.current) {
+              videoRef.current.srcObject = preferredBackCameraStream
+              streamRef.current = preferredBackCameraStream
+              setError(null)
+              console.log("Camera initialized with preferred back camera constraint")
+
+              try {
+                await videoRef.current.play()
+              } catch (playErr) {
+                console.error("Error playing camera video:", playErr)
+              }
+            }
+            return // Exit early if successful
+          } catch (preferredConstraintErr) {
+            console.log("Could not access camera with preferred constraint, trying basic access")
+          }
+        }
+      } else {
+        // For laptops/desktops, directly use the front camera (typically the only camera)
+        console.log("Laptop/Desktop detected - requesting front camera")
+
         try {
-          console.log("Trying fallback camera access")
-          const fallbackStream = await navigator.mediaDevices.getUserMedia({
+          const frontCameraStream = await navigator.mediaDevices.getUserMedia({
             audio: false,
             video: {
-              facingMode: "environment", // Prefer back camera but don't require it
+              facingMode: "user", // Front camera for laptops
               width: { ideal: 1280 },
               height: { ideal: 720 },
             },
           })
 
           if (videoRef.current) {
-            videoRef.current.srcObject = fallbackStream
-            streamRef.current = fallbackStream
+            videoRef.current.srcObject = frontCameraStream
+            streamRef.current = frontCameraStream
             setError(null)
+            console.log("Front camera initialized successfully")
 
             try {
               await videoRef.current.play()
-              console.log("Fallback camera video started successfully")
-              return // Exit early if successful
             } catch (playErr) {
-              console.error("Error playing fallback camera video:", playErr)
+              console.error("Error playing front camera video:", playErr)
             }
           }
-        } catch (fallbackErr) {
-          console.error("Fallback camera access failed:", fallbackErr)
-
-          // Last resort: try with any camera
-          try {
-            console.log("Trying basic camera access as last resort")
-            const basicStream = await navigator.mediaDevices.getUserMedia({
-              audio: false,
-              video: true,
-            })
-
-            if (videoRef.current) {
-              videoRef.current.srcObject = basicStream
-              streamRef.current = basicStream
-              setError(null)
-
-              try {
-                await videoRef.current.play()
-                console.log("Basic camera video started successfully")
-              } catch (playErr) {
-                console.error("Error playing basic camera video:", playErr)
-                throw playErr // Re-throw to be caught by the outer catch
-              }
-            }
-          } catch (basicErr) {
-            console.error("Basic camera access failed:", basicErr)
-            throw basicErr // Re-throw to be caught by the outer catch
-          }
+          return // Exit early if successful
+        } catch (frontCameraErr) {
+          console.log("Could not access front camera with specific constraint, trying basic access")
         }
-      } else {
-        // Non-mobile devices use the original approach
-        const constraints = {
-          audio: false,
-          video: {
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
-        }
+      }
 
-        console.log("Requesting camera with constraints:", JSON.stringify(constraints))
-        const stream = await navigator.mediaDevices.getUserMedia(constraints)
+      // Last resort: try with any camera (fallback for all devices)
+      console.log("Trying basic camera access as last resort")
+      const basicStream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: true,
+      })
 
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream
-          streamRef.current = stream
-          setError(null)
+      if (videoRef.current) {
+        videoRef.current.srcObject = basicStream
+        streamRef.current = basicStream
+        setError(null)
+        console.log("Basic camera access successful")
+
+        try {
+          await videoRef.current.play()
+        } catch (playErr) {
+          console.error("Error playing video with basic camera access:", playErr)
         }
       }
     } catch (err) {
@@ -945,7 +973,6 @@ const NavigationAssistant = () => {
             </div>
           </div>
         </div>
-
         <div
           className="relative aspect-video bg-black rounded-lg overflow-hidden"
           onClick={handleVideoClick} // Add click handler for mobile
@@ -1028,7 +1055,6 @@ const NavigationAssistant = () => {
             </div>
           )}
         </div>
-
         <button
           className={`w-full py-4 text-lg font-medium rounded-md text-white transition-colors ${
             isActive ? "bg-red-500 hover:bg-red-600" : "bg-emerald-500 hover:bg-emerald-600"
@@ -1037,7 +1063,6 @@ const NavigationAssistant = () => {
         >
           {isActive ? "Stop Navigation Assistant" : "Start Navigation Assistant"}
         </button>
-
         <button
           className="w-full py-2 mt-2 text-sm font-medium rounded-md text-white bg-blue-500 hover:bg-blue-600"
           onClick={() => {
@@ -1047,14 +1072,13 @@ const NavigationAssistant = () => {
         >
           Test Speech
         </button>
-
         <button
           className="w-full py-2 mt-2 text-sm font-medium rounded-md text-white bg-purple-500 hover:bg-purple-600"
           onClick={forceReload}
         >
           Reload Application
         </button>
-
+        // Add a device info section to the status display to help with debugging
         <div className="p-4 bg-slate-100 rounded-lg">
           <h3 className="font-medium mb-1">Status:</h3>
           <p className="mb-2">
@@ -1067,10 +1091,11 @@ const NavigationAssistant = () => {
                   : "Waiting for connection"}
           </p>
           <p className="mb-2 text-sm text-gray-500">
-            Device: {isIOS ? "iOS" : isAndroid ? "Android" : isMobile ? "Mobile" : "Desktop"}
-            {isAndroid && " • Chrome requires camera permissions"}
-            {isIOS && " • Safari requires camera permissions"}
-            {cameraPermissionRequested && !error && " • Camera permission requested"}
+            Device: {isIOS ? "iOS" : isAndroid ? "Android" : isMobile ? "Mobile" : "Laptop/Desktop"}
+            {isAndroid && " • Using back camera on Android"}
+            {isIOS && " • Using back camera on iOS"}
+            {!isMobile && " • Using front camera"}
+            {cameraPermissionRequested && !error && " • Camera permission granted"}
           </p>
           <p className="text-sm text-gray-500 mb-2">
             API: {apiStatus} • {isConnected ? "Connected" : "Disconnected"}
