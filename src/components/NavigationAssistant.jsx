@@ -13,59 +13,99 @@ const NavigationAssistant = () => {
   const [isIOS, setIsIOS] = useState(false)
   const [isAndroid, setIsAndroid] = useState(false)
   const [cameraPermissionRequested, setCameraPermissionRequested] = useState(false)
+  const [serverAddress, setServerAddress] = useState("http://192.168.179.70:5000")
+  const [showSettings, setShowSettings] = useState(false)
 
   const videoRef = useRef(null)
   const streamRef = useRef(null)
   const socketRef = useRef(null)
   const isCapturingRef = useRef(false)
   const utteranceRef = useRef(null)
+  const serverInputRef = useRef(null)
 
-  // Socket.IO connection - connect to your Flask server
+  // Socket.IO connection - connect to Flask server
   useEffect(() => {
     if (!isActive) return
 
-    // Use the IP address shown in your Vite output
-    // Make sure to replace this with your actual computer's IP address
-    const socket = io("see-for-me-api-production.up.railway.app")
-    socketRef.current = socket
-
-    socket.on("connect", () => {
-      setIsConnected(true)
-      setError(null)
-      console.log("Socket connected to Flask server")
-    })
-
-    socket.on("disconnect", () => {
-      setIsConnected(false)
-      console.log("Socket disconnected from Flask server")
-    })
-
-    socket.on("connect_error", (err) => {
-      console.error("Socket connection error:", err)
-      setError("Connection error. Please try again.")
-      setIsConnected(false)
-    })
-
-    socket.on("server_response", (data) => {
-      console.log("Received server response:", data)
-      const message = data.message || "No guidance available"
-      setLastMessage(message)
-      speakMessage(message)
-    })
-
-    return () => {
-      socket.disconnect()
-      socketRef.current = null
+    // Disconnect any existing socket
+    if (socketRef.current) {
+      socketRef.current.disconnect()
     }
-  }, [isActive])
 
-  // Detect device type more accurately
+    try {
+      console.log(`Attempting to connect to server at: ${serverAddress}`)
+
+      // Create socket with explicit options for better compatibility
+      const socket = io("see-for-me-api-production.up.railway.app", {
+        reconnectionAttempts: 5,
+        timeout: 10000,
+        transports: ["websocket", "polling"],
+        upgrade: true,
+        forceNew: true,
+      })
+
+      socketRef.current = socket
+
+      socket.on("connect", () => {
+        console.log("Socket.IO connected successfully!")
+        setIsConnected(true)
+        setError(null)
+      })
+
+      socket.on("disconnect", () => {
+        console.log("Socket.IO disconnected from server")
+        setIsConnected(false)
+      })
+
+      socket.on("connect_error", (err) => {
+        console.error("Socket.IO connection error:", err)
+        setError(
+          `Connection error: Cannot connect to server at ${serverAddress}. Please check the server address and ensure the server is running.`,
+        )
+        setIsConnected(false)
+      })
+
+      socket.on("server_response", (data) => {
+        console.log("Received server response:", data)
+        const message = data.message || "No guidance available"
+        setLastMessage(message)
+        speakMessage(message)
+      })
+
+      // Set a timeout for connection
+      const connectionTimeout = setTimeout(() => {
+        if (socket.connected) return
+        console.error("Socket.IO connection timeout")
+        setError(
+          `Connection timeout: Could not connect to server at ${serverAddress} within 10 seconds. Please check the server address and ensure the server is running.`,
+        )
+      }, 10000)
+
+      return () => {
+        clearTimeout(connectionTimeout)
+        socket.disconnect()
+        socketRef.current = null
+      }
+    } catch (err) {
+      console.error("Error creating Socket.IO connection:", err)
+      setError(`Connection error: ${err.message}. Please check the server address.`)
+      return () => {}
+    }
+  }, [isActive, serverAddress])
+
+  // Detect device type
   useEffect(() => {
     const detectDevice = () => {
       const userAgent = navigator.userAgent || window.opera
-      const isIOSDevice = /iphone|ipad|ipod/i.test(userAgent.toLowerCase()) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+      const isIOSDevice =
+        /iphone|ipad|ipod/i.test(userAgent.toLowerCase()) ||
+        (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
       const isAndroidDevice = /android/i.test(userAgent.toLowerCase())
-      const isMobileDevice = isIOSDevice || isAndroidDevice || /webos|blackberry|iemobile|opera mini/i.test(userAgent.toLowerCase()) || ('ontouchstart' in window)
+      const isMobileDevice =
+        isIOSDevice ||
+        isAndroidDevice ||
+        /webos|blackberry|iemobile|opera mini/i.test(userAgent.toLowerCase()) ||
+        "ontouchstart" in window
 
       setIsMobile(isMobileDevice)
       setIsIOS(isIOSDevice)
@@ -130,7 +170,7 @@ const NavigationAssistant = () => {
     }
   }
 
-  // Initialize camera with device-specific handling
+  // Initialize camera with simplified approach for Android
   const initCamera = async () => {
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -139,142 +179,154 @@ const NavigationAssistant = () => {
 
       setCameraPermissionRequested(true)
 
-      // Set constraints based on device type
-      let constraints = {}
+      // For Android, use the simplest approach first
+      if (isAndroid) {
+        console.log("Android detected - using simplified camera approach")
 
-      if (isIOS) {
-        console.log("Using iOS-specific camera constraints")
-        // iOS Safari has issues with exact constraints, use simpler ones
-        constraints = {
-          audio: false,
-          video: true, // Start with basic video request for iOS
-        }
-      } else if (isAndroid) {
-        console.log("Using Android-specific camera constraints")
-        // For Android, we'll try a more direct approach
-        constraints = {
-          audio: false,
-          video: {
-            // On Android, we need to be explicit about wanting the back camera
-            facingMode: { exact: "environment" },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
-        }
-      } else if (isMobile) {
-        console.log("Using generic mobile camera constraints")
-        constraints = {
-          audio: false,
-          video: {
-            facingMode: "environment",
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
-        }
-      } else {
-        console.log("Using desktop camera constraints")
-        constraints = {
-          audio: false,
-          video: {
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
+        try {
+          // Start with the most basic request
+          console.log("Requesting basic camera access for Android")
+          const basicStream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: true,
+          })
+
+          if (videoRef.current) {
+            videoRef.current.srcObject = basicStream
+            streamRef.current = basicStream
+            setError(null)
+
+            // On Android, explicitly play the video
+            try {
+              await videoRef.current.play()
+              console.log("Video playback started successfully")
+
+              // Now try to switch to back camera if possible
+              setTimeout(async () => {
+                try {
+                  console.log("Attempting to switch to back camera")
+                  const backCameraStream = await navigator.mediaDevices.getUserMedia({
+                    audio: false,
+                    video: { facingMode: "environment" },
+                  })
+
+                  // Stop old tracks
+                  basicStream.getVideoTracks().forEach((track) => track.stop())
+
+                  // Set new stream
+                  videoRef.current.srcObject = backCameraStream
+                  streamRef.current = backCameraStream
+
+                  try {
+                    await videoRef.current.play()
+                    console.log("Back camera video started successfully")
+                  } catch (playErr) {
+                    console.error("Error playing back camera video:", playErr)
+                  }
+                } catch (backCameraErr) {
+                  console.warn("Could not switch to back camera, using default", backCameraErr)
+                  // Continue with front camera
+                }
+              }, 500)
+            } catch (playErr) {
+              console.error("Error playing video:", playErr)
+              // Don't throw here, just log it
+            }
+          }
+          return // Exit early if successful
+        } catch (androidErr) {
+          console.error("Android basic camera access failed:", androidErr)
+          throw new Error(`Android camera error: ${androidErr.name}. Please check Chrome camera permissions.`)
         }
       }
 
-      console.log("Requesting camera with constraints:", JSON.stringify(constraints))
+      // iOS-specific handling
+      if (isIOS) {
+        console.log("iOS detected - using iOS-specific camera handling")
 
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia(constraints)
+        try {
+          // For iOS, start with the absolute simplest request
+          console.log("Requesting basic camera access for iOS")
+          const basicStream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: true,
+          })
 
-        // Check if we got a video track
-        const videoTracks = stream.getVideoTracks()
-        if (videoTracks.length === 0) {
-          throw new Error("No video track available in the media stream")
-        }
+          if (videoRef.current) {
+            videoRef.current.srcObject = basicStream
+            streamRef.current = basicStream
+            setError(null)
 
-        console.log("Camera accessed successfully. Video tracks:", videoTracks.length)
-        console.log("Camera settings:", videoTracks[0].getSettings())
-
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream
-          streamRef.current = stream
-          setError(null)
-
-          // For mobile devices, explicitly play the video
-          try {
-            await videoRef.current.play()
-            console.log("Video playback started successfully")
-          } catch (playErr) {
-            console.error("Error playing video:", playErr)
-            // Don't throw here, just log it
-          }
-        }
-      } catch (err) {
-        console.error("Primary camera request failed:", err)
-
-        // If the exact "environment" constraint fails on Android, try without "exact"
-        if (isAndroid && (err.name === "OverconstrainedError" || err.name === "ConstraintNotSatisfiedError")) {
-          console.log("Exact environment mode failed on Android, trying fallback...")
-          try {
-            const fallbackConstraints = {
-              audio: false,
-              video: {
-                facingMode: "environment", // Try without "exact"
-                width: { ideal: 1280 },
-                height: { ideal: 720 },
-              },
-            }
-
-            console.log("Requesting camera with fallback constraints:", JSON.stringify(fallbackConstraints))
-            const stream = await navigator.mediaDevices.getUserMedia(fallbackConstraints)
-
-            if (videoRef.current) {
-              videoRef.current.srcObject = stream
-              streamRef.current = stream
-              setError(null)
-
-              try {
-                await videoRef.current.play()
-                console.log("Video playback started successfully with fallback")
-              } catch (playErr) {
-                console.error("Error playing video with fallback:", playErr)
-              }
-              return // Exit early if successful
-            }
-          } catch (fallbackErr) {
-            console.error("Fallback camera initialization also failed:", fallbackErr)
-
-            // Try with the most basic constraints as a last resort
+            // On iOS, we need to explicitly play the video
             try {
-              console.log("Trying with basic video constraints")
-              const basicStream = await navigator.mediaDevices.getUserMedia({
-                audio: false,
-                video: true,
-              })
+              await videoRef.current.play()
+              console.log("Video playback started successfully")
+            } catch (playErr) {
+              console.error("Error playing video:", playErr)
+              // Don't throw here, just log it
+            }
 
-              if (videoRef.current) {
-                videoRef.current.srcObject = basicStream
-                streamRef.current = basicStream
-                setError(null)
+            // Now try to get the back camera if possible
+            setTimeout(async () => {
+              try {
+                console.log("Attempting to switch to back camera")
+                const backCameraStream = await navigator.mediaDevices.getUserMedia({
+                  audio: false,
+                  video: { facingMode: "environment" },
+                })
+
+                // Stop old tracks
+                basicStream.getVideoTracks().forEach((track) => track.stop())
+
+                // Set new stream
+                videoRef.current.srcObject = backCameraStream
+                streamRef.current = backCameraStream
 
                 try {
                   await videoRef.current.play()
-                  console.log("Video playback started successfully with basic constraints")
                 } catch (playErr) {
-                  console.error("Error playing video with basic constraints:", playErr)
+                  console.error("Error playing back camera video:", playErr)
                 }
-                return // Exit early if successful
+              } catch (backCameraErr) {
+                console.warn("Could not switch to back camera, using default", backCameraErr)
+                // Continue with front camera
               }
-            } catch (basicErr) {
-              console.error("Even basic camera initialization failed:", basicErr)
-              throw basicErr // Re-throw to be caught by the outer catch
-            }
+            }, 500)
           }
-        } else {
-          // For other errors or devices, just throw to the outer catch
-          throw err
+          return // Exit early if successful
+        } catch (iosErr) {
+          console.error("iOS basic camera access failed:", iosErr)
+          throw new Error(
+            `iOS camera error: ${iosErr.name}. Please check Safari camera permissions in your device settings.`,
+          )
         }
+      }
+
+      // Non-mobile devices continue with normal flow
+      const constraints = {
+        audio: false,
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+      }
+
+      console.log("Requesting camera with constraints:", JSON.stringify(constraints))
+      const stream = await navigator.mediaDevices.getUserMedia(constraints)
+
+      // Check if we got a video track
+      const videoTracks = stream.getVideoTracks()
+      if (videoTracks.length === 0) {
+        throw new Error("No video track available in the media stream")
+      }
+
+      console.log("Camera accessed successfully. Video tracks:", videoTracks.length)
+      console.log("Camera settings:", videoTracks[0].getSettings())
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream
+        streamRef.current = stream
+        setError(null)
       }
     } catch (err) {
       console.error("Camera initialization error:", err)
@@ -290,12 +342,16 @@ const NavigationAssistant = () => {
           errorMessage = "Camera is in use by another app. Please close any apps using the camera and try again."
         } else if (err.name === "OverconstrainedError" || err.name === "ConstraintNotSatisfiedError") {
           errorMessage = "Your device doesn't support the requested camera mode. Please try a different browser."
+        } else if (err.message && err.message.includes("Android camera error")) {
+          errorMessage = err.message
         } else {
           errorMessage = "Android camera error. Please check your camera permissions in Chrome settings."
         }
       } else if (isIOS) {
         if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
           errorMessage = "Camera access denied. On iOS, go to Settings > Safari > Camera and ensure it's allowed."
+        } else if (err.message && err.message.includes("iOS camera error")) {
+          errorMessage = err.message
         } else {
           errorMessage = "iOS camera error. Please check your camera permissions in Safari settings."
         }
@@ -383,6 +439,23 @@ const NavigationAssistant = () => {
 
     const utterance = new SpeechSynthesisUtterance(message)
     utteranceRef.current = utterance
+
+    // Try to select a clear voice if available
+    const voices = window.speechSynthesis.getVoices()
+    console.log("Available voices:", voices.length)
+
+    // Try to find a good English voice
+    const englishVoice = voices.find(
+      (voice) =>
+        (voice.lang.includes("en") && voice.name.includes("Google")) ||
+        (voice.lang.includes("en") && voice.name.includes("Female")) ||
+        voice.lang.includes("en-US"),
+    )
+
+    if (englishVoice) {
+      console.log("Selected voice:", englishVoice.name)
+      utterance.voice = englishVoice
+    }
 
     utterance.rate = 1.0
     utterance.pitch = 1.0
@@ -506,6 +579,51 @@ const NavigationAssistant = () => {
     }
   }
 
+  // Handle server address update
+  const updateServerAddress = () => {
+    if (serverInputRef.current && serverInputRef.current.value) {
+      const newAddress = serverInputRef.current.value.trim()
+      if (newAddress !== serverAddress) {
+        console.log(`Updating server address from ${serverAddress} to ${newAddress}`)
+        setServerAddress(newAddress)
+
+        // If active, reconnect
+        if (isActive) {
+          if (socketRef.current) {
+            socketRef.current.disconnect()
+          }
+          setIsConnected(false)
+        }
+      }
+      setShowSettings(false)
+    }
+  }
+
+  // Add a useEffect to load voices as soon as possible
+  // Add this after your other useEffects
+  useEffect(() => {
+    // Load voices as early as possible
+    const loadVoices = () => {
+      window.speechSynthesis.getVoices()
+      console.log("Pre-loaded voices")
+    }
+
+    // Chrome needs this event
+    if (window.speechSynthesis) {
+      loadVoices()
+
+      if (speechSynthesis.onvoiceschanged !== undefined) {
+        speechSynthesis.onvoiceschanged = loadVoices
+      }
+    }
+
+    return () => {
+      if (speechSynthesis.onvoiceschanged !== undefined) {
+        speechSynthesis.onvoiceschanged = null
+      }
+    }
+  }, [])
+
   return (
     <div className="flex flex-col gap-6 max-w-3xl mx-auto">
       {error && (
@@ -527,11 +645,28 @@ const NavigationAssistant = () => {
               <line x1="12" y1="8" x2="12" y2="12"></line>
               <line x1="12" y1="16" x2="12.01" y2="16"></line>
             </svg>
-            <span className="font-medium">Camera Error</span>
+            <span className="font-medium">Error</span>
           </div>
           <p>{error}</p>
 
-          {isAndroid && (
+          {error.includes("Connection error") && (
+            <div className="mt-2 text-sm">
+              <p className="font-medium">Connection Troubleshooting:</p>
+              <ol className="list-decimal pl-5 mt-1 space-y-1">
+                <li>Make sure your Flask server is running</li>
+                <li>Verify the server address is correct (currently: {serverAddress})</li>
+                <li>Ensure your phone and computer are on the same network</li>
+                <li>Check if any firewall is blocking the connection</li>
+                <li>
+                  <button className="text-blue-600 underline" onClick={() => setShowSettings(true)}>
+                    Click here to update server address
+                  </button>
+                </li>
+              </ol>
+            </div>
+          )}
+
+          {isAndroid && error.includes("Camera") && (
             <div className="mt-2 text-sm">
               <p className="font-medium">Android Chrome Troubleshooting:</p>
               <ol className="list-decimal pl-5 mt-1 space-y-1">
@@ -544,7 +679,7 @@ const NavigationAssistant = () => {
             </div>
           )}
 
-          {isIOS && (
+          {isIOS && error.includes("Camera") && (
             <div className="mt-2 text-sm">
               <p className="font-medium">iOS Safari Troubleshooting:</p>
               <ol className="list-decimal pl-5 mt-1 space-y-1">
@@ -558,6 +693,30 @@ const NavigationAssistant = () => {
         </div>
       )}
 
+      {showSettings && (
+        <div className="p-4 bg-blue-50 rounded-md">
+          <h3 className="font-medium mb-2">Server Settings</h3>
+          <div className="flex flex-col gap-2">
+            <label className="text-sm text-gray-600">Server Address (include http:// and port)</label>
+            <div className="flex gap-2">
+              <input
+                ref={serverInputRef}
+                type="text"
+                className="flex-1 p-2 border rounded"
+                defaultValue={serverAddress}
+                placeholder="http://192.168.x.x:5000"
+              />
+              <button className="bg-blue-500 text-white px-3 py-2 rounded" onClick={updateServerAddress}>
+                Save
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">
+              This should be the IP address and port of your Flask server. Example: http://192.168.1.100:5000
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -568,37 +727,60 @@ const NavigationAssistant = () => {
             <span className="text-lg font-medium">{isActive ? "Active" : "Inactive"}</span>
           </div>
 
-          <div className="flex items-center gap-2 text-sm">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className={isConnected ? "text-emerald-500" : "text-red-500"}
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 text-sm">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className={isConnected ? "text-emerald-500" : "text-red-500"}
+              >
+                {isConnected ? (
+                  <>
+                    <path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
+                    <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
+                  </>
+                ) : (
+                  <>
+                    <line x1="1" y1="1" x2="23" y2="23"></line>
+                    <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"></path>
+                    <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"></path>
+                    <path d="M10.71 5.05A16 16 0 0 1 22.58 9"></path>
+                    <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"></path>
+                    <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+                    <line x1="12" y1="20" x2="12.01" y2="20"></line>
+                  </>
+                )}
+              </svg>
+              <span>{isConnected ? "Connected" : "Disconnected"}</span>
+            </div>
+
+            <button
+              onClick={() => setShowSettings(!showSettings)}
+              className="text-gray-500 hover:text-gray-700"
+              aria-label="Settings"
             >
-              {isConnected ? (
-                <>
-                  <path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
-                  <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
-                </>
-              ) : (
-                <>
-                  <line x1="1" y1="1" x2="23" y2="23"></line>
-                  <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"></path>
-                  <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"></path>
-                  <path d="M10.71 5.05A16 16 0 0 1 22.58 9"></path>
-                  <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"></path>
-                  <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
-                  <line x1="12" y1="20" x2="12.01" y2="20"></line>
-                </>
-              )}
-            </svg>
-            <span>{isConnected ? "Connected" : "Disconnected"}</span>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82 1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+              </svg>
+            </button>
           </div>
         </div>
 
@@ -711,6 +893,14 @@ const NavigationAssistant = () => {
             {isIOS && " • Safari requires camera permissions"}
             {cameraPermissionRequested && !error && " • Camera permission requested"}
           </p>
+          <p className="text-sm text-gray-500 mb-2">
+            Server: {serverAddress} • {isConnected ? "Connected" : "Disconnected"}
+            {!isConnected && (
+              <button className="ml-2 text-blue-600 underline" onClick={() => setShowSettings(true)}>
+                Change
+              </button>
+            )}
+          </p>
           {lastMessage && (
             <>
               <h3 className="font-medium mb-1">Last Guidance:</h3>
@@ -724,4 +914,3 @@ const NavigationAssistant = () => {
 }
 
 export default NavigationAssistant
-
