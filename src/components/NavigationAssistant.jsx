@@ -13,7 +13,7 @@ const NavigationAssistant = () => {
   const [isIOS, setIsIOS] = useState(false)
   const [isAndroid, setIsAndroid] = useState(false)
   const [cameraPermissionRequested, setCameraPermissionRequested] = useState(false)
-  // const [serverAddress, setServerAddress] = useState("http://192.168.179.70:5000")
+  const [serverAddress, setServerAddress] = useState("http://192.168.179.70:5000")
   const [showSettings, setShowSettings] = useState(false)
 
   const videoRef = useRef(null)
