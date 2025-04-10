@@ -289,6 +289,50 @@ const NavigationAssistant = () => {
     }
   }, [])
 
+  // Add this useEffect to initialize speech synthesis as early as possible
+  // Add this after the device detection useEffect
+  useEffect(() => {
+    // Try to initialize speech synthesis as early as possible
+    if (window.speechSynthesis) {
+      console.log("Pre-loading speech synthesis voices")
+
+      // Force load voices
+      const voices = window.speechSynthesis.getVoices()
+      console.log("Available voices:", voices.length)
+
+      // Set up voice changed event listener
+      if (speechSynthesis.onvoiceschanged !== undefined) {
+        speechSynthesis.onvoiceschanged = () => {
+          const updatedVoices = window.speechSynthesis.getVoices()
+          console.log("Voices loaded:", updatedVoices.length)
+        }
+      }
+
+      // For iOS, we need to periodically "ping" the speech synthesis
+      // to prevent it from going to sleep
+      let speechKeepAliveInterval
+
+      if (isIOS) {
+        speechKeepAliveInterval = setInterval(() => {
+          if (!isSpeaking) {
+            // This helps keep the system active on iOS
+            speechSynthesis.cancel()
+          }
+        }, 10000)
+      }
+
+      return () => {
+        if (speechSynthesis.onvoiceschanged !== undefined) {
+          speechSynthesis.onvoiceschanged = null
+        }
+
+        if (speechKeepAliveInterval) {
+          clearInterval(speechKeepAliveInterval)
+        }
+      }
+    }
+  }, [isIOS, isSpeaking])
+
   // Capture frame function - optimized for mobile performance
   async function captureFrame(videoElement) {
     return new Promise((resolve) => {
@@ -517,10 +561,30 @@ const NavigationAssistant = () => {
       if (voices && voices.length > 0) {
         let selectedVoice = null
 
-        // Try to find an English voice
-        selectedVoice = voices.find(
-          (voice) => voice.lang.includes("en-US") || voice.lang.includes("en-GB") || voice.lang.includes("en"),
-        )
+        // For iOS, try to find a specific voice that works well
+        if (isIOS) {
+          selectedVoice = voices.find(
+            (voice) =>
+              voice.name.includes("Samantha") ||
+              voice.name.includes("Karen") ||
+              (voice.lang === "en-US" && voice.localService === true),
+          )
+        }
+        // For Android, prefer Google voices
+        else if (isAndroid) {
+          selectedVoice = voices.find(
+            (voice) =>
+              (voice.name.includes("Google") && voice.lang.includes("en")) ||
+              voice.name.includes("English United States"),
+          )
+        }
+
+        // Fallback to any English voice
+        if (!selectedVoice) {
+          selectedVoice = voices.find(
+            (voice) => voice.lang.includes("en-US") || voice.lang.includes("en-GB") || voice.lang.includes("en"),
+          )
+        }
 
         if (selectedVoice) {
           utterance.voice = selectedVoice
@@ -613,10 +677,26 @@ const NavigationAssistant = () => {
       // Initialize audio context to help with mobile audio restrictions
       initAudio()
 
-      // Initialize speech synthesis when activating
+      // Initialize speech synthesis when activating - this is the key part that makes speech work
       if (window.speechSynthesis) {
         // Force load voices
         window.speechSynthesis.getVoices()
+
+        // Speak a silent utterance to initialize the speech system on mobile
+        // This is crucial for iOS - it needs a speech command triggered by user interaction
+        const initUtterance = new SpeechSynthesisUtterance(" ")
+        initUtterance.volume = 0.1
+        initUtterance.onend = () => {
+          console.log("Initial speech completed - speech system initialized")
+          // Try a very short test message to fully initialize the speech system
+          const testUtterance = new SpeechSynthesisUtterance("Ready")
+          testUtterance.volume = 1.0
+          testUtterance.onend = () => {
+            console.log("Speech system fully initialized")
+          }
+          window.speechSynthesis.speak(testUtterance)
+        }
+        window.speechSynthesis.speak(initUtterance)
       }
 
       // Reset connection attempts
@@ -816,6 +896,25 @@ const NavigationAssistant = () => {
     }
   }
 
+  // Add this function to automatically trigger speech initialization
+  const triggerSpeechInit = () => {
+    if (!window.speechSynthesis) return
+
+    try {
+      // Create a silent utterance
+      const silentUtterance = new SpeechSynthesisUtterance(" ")
+      silentUtterance.volume = 0
+      silentUtterance.onend = () => {
+        console.log("Silent speech initialization complete")
+      }
+      window.speechSynthesis.speak(silentUtterance)
+    } catch (e) {
+      console.error("Error in speech initialization:", e)
+    }
+  }
+
+  // Modify the return statement to include a hidden button that can be programmatically clicked
+  // Add this to the return statement, right after the main button
   return (
     <div className="flex flex-col gap-4 max-w-full mx-auto">
       {error && (
@@ -948,6 +1047,23 @@ const NavigationAssistant = () => {
           {isActive ? "Stop Navigation Assistant" : "Start Navigation Assistant"}
         </button>
 
+        {/* Hidden button for speech initialization - can be removed from UI but keep the functionality */}
+        <button
+          className="hidden"
+          ref={(btn) => {
+            // Auto-click this hidden button when isActive changes to true
+            if (btn && isActive) {
+              setTimeout(() => {
+                btn.click()
+              }, 500)
+            }
+          }}
+          onClick={triggerSpeechInit}
+        >
+          Initialize Speech
+        </button>
+
+        {/* You can remove the test speech section if you want, or keep it */}
         {/* Enhanced test speech section */}
         <div className="p-4 bg-blue-50 rounded-lg">
           <h3 className="font-medium mb-2">Speech Test</h3>
