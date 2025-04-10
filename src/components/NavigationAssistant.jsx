@@ -566,78 +566,67 @@ const NavigationAssistant = () => {
 
   // Replace the current speakMessage function with this improved version
   const speakMessage = (message) => {
-    if (!message || isSpeaking) return
+    if (!message) return
 
-    if (!window.speechSynthesis) {
-      console.error("Speech synthesis not supported")
-      setError("Text-to-speech is not supported by this browser")
-      return
-    }
+    console.log("Attempting to speak:", message)
 
     // Cancel any ongoing speech
     window.speechSynthesis.cancel()
 
+    // Force set speaking state
     setIsSpeaking(true)
-    console.log("Starting to speak:", message)
 
     // Create a new utterance
     const utterance = new SpeechSynthesisUtterance(message)
     utteranceRef.current = utterance
 
-    // Set properties for better speech on mobile
-    utterance.rate = isIOS ? 1.1 : 1.0 // Slightly faster on iOS
+    // Set properties for better speech
+    utterance.rate = 1.0
     utterance.pitch = 1.0
-    utterance.volume = 1.0 // Maximum volume
+    utterance.volume = 1.0
 
-    // Try to select a clear voice if available
-    const voices = window.speechSynthesis.getVoices()
-    console.log("Available voices:", voices.length)
+    // Get available voices
+    let voices = window.speechSynthesis.getVoices()
 
-    // Select the best voice for the platform
-    let selectedVoice = null
-
-    // For iOS, try to find a specific voice that works well
-    if (isIOS) {
-      selectedVoice = voices.find(
-        (voice) =>
-          voice.name.includes("Samantha") ||
-          voice.name.includes("Karen") ||
-          (voice.lang === "en-US" && voice.localService === true),
-      )
+    // If no voices are available yet, try again after a short delay
+    if (!voices || voices.length === 0) {
+      setTimeout(() => {
+        voices = window.speechSynthesis.getVoices()
+        if (voices && voices.length > 0) {
+          selectVoiceAndSpeak(utterance, voices, message)
+        } else {
+          // Just try to speak with default voice
+          basicSpeak(utterance, message)
+        }
+      }, 100)
+    } else {
+      selectVoiceAndSpeak(utterance, voices, message)
     }
-    // For Android, prefer Google voices
-    else if (isAndroid) {
-      selectedVoice = voices.find(
-        (voice) =>
-          (voice.name.includes("Google") && voice.lang.includes("en")) || voice.name.includes("English United States"),
-      )
-    }
+  }
 
-    // Fallback to any English voice
-    if (!selectedVoice) {
-      selectedVoice = voices.find(
-        (voice) => voice.lang.includes("en-US") || voice.lang.includes("en-GB") || voice.lang.includes("en"),
-      )
-    }
+  // Helper function to select voice and start speaking
+  const selectVoiceAndSpeak = (utterance, voices, message) => {
+    // Try to find an English voice
+    const selectedVoice = voices.find(
+      (voice) => voice.lang.includes("en-US") || voice.lang.includes("en-GB") || voice.lang.includes("en"),
+    )
 
     if (selectedVoice) {
       console.log("Selected voice:", selectedVoice.name)
       utterance.voice = selectedVoice
-    } else if (voices.length > 0) {
-      // Just use the first available voice if no English voice is found
-      console.log("Using default voice:", voices[0].name)
-      utterance.voice = voices[0]
     }
 
+    basicSpeak(utterance, message)
+  }
+
+  // Basic speech function with proper event handling
+  const basicSpeak = (utterance, message) => {
     // Handle speech completion
     utterance.onend = () => {
       console.log("Speech completed")
       setIsSpeaking(false)
       // Wait a short delay before starting next capture cycle
-      setTimeout(() => {
-        console.log("Starting next capture cycle after speech")
-        startCaptureCycle()
-      }, 500)
+      setTimeout(startCaptureCycle, 500)
     }
 
     utterance.onerror = (event) => {
@@ -646,31 +635,31 @@ const NavigationAssistant = () => {
       setTimeout(startCaptureCycle, 500)
     }
 
-    // For iOS, we need to use a workaround to make speech work reliably
-    if (isIOS) {
-      // iOS requires speech to be triggered within a user interaction
-      // and sometimes needs a "kick" to start properly
+    // Try to speak
+    try {
       speechSynthesis.speak(utterance)
 
-      // This pause and resume trick helps on iOS
+      // This pause and resume trick helps on iOS and some browsers
       setTimeout(() => {
-        speechSynthesis.pause()
-        speechSynthesis.resume()
+        if (speechSynthesis.paused) {
+          speechSynthesis.resume()
+        }
       }, 100)
-    } else {
-      // Normal speech for other platforms
-      speechSynthesis.speak(utterance)
-    }
 
-    // Set a timeout to prevent hanging if speech doesn't complete
-    const timeoutDuration = Math.max(5000, message.length * 100)
-    setTimeout(() => {
-      if (isSpeaking && utteranceRef.current === utterance) {
-        console.warn("Speech timeout reached, forcing next cycle")
-        setIsSpeaking(false)
-        startCaptureCycle()
-      }
-    }, timeoutDuration)
+      // Set a timeout to prevent hanging if speech doesn't complete
+      const timeoutDuration = Math.max(5000, message.length * 100)
+      setTimeout(() => {
+        if (isSpeaking) {
+          console.warn("Speech timeout reached, forcing next cycle")
+          setIsSpeaking(false)
+          startCaptureCycle()
+        }
+      }, timeoutDuration)
+    } catch (err) {
+      console.error("Error speaking:", err)
+      setIsSpeaking(false)
+      setTimeout(startCaptureCycle, 500)
+    }
   }
 
   // Add this function to force reload the page - useful for mobile troubleshooting
@@ -802,6 +791,17 @@ const NavigationAssistant = () => {
     if (newState) {
       // Initialize audio context to help with mobile audio restrictions
       initAudio()
+
+      // Initialize speech synthesis when activating
+      if (window.speechSynthesis) {
+        // Force load voices
+        window.speechSynthesis.getVoices()
+
+        // Speak a silent message to initialize the speech system
+        const silentUtterance = new SpeechSynthesisUtterance(" ")
+        silentUtterance.volume = 0.01
+        window.speechSynthesis.speak(silentUtterance)
+      }
 
       // Reset connection attempts
       setConnectionAttempts(0)
@@ -993,6 +993,21 @@ const NavigationAssistant = () => {
     }
   }, [isIOS, isSpeaking])
 
+  // Initialize speech synthesis on component mount
+  useEffect(() => {
+    if (window.speechSynthesis) {
+      // Force load voices
+      window.speechSynthesis.getVoices()
+
+      // Add voice changed event listener
+      if (speechSynthesis.onvoiceschanged !== undefined) {
+        speechSynthesis.onvoiceschanged = () => {
+          console.log("Voices loaded:", window.speechSynthesis.getVoices().length)
+        }
+      }
+    }
+  }, [])
+
   return (
     <div className="flex flex-col gap-4 max-w-full mx-auto">
       {error && (
@@ -1125,6 +1140,16 @@ const NavigationAssistant = () => {
           {isActive ? "Stop Navigation Assistant" : "Start Navigation Assistant"}
         </button>
 
+        <button
+          className="w-full py-3 mt-2 text-base font-medium rounded-md text-white bg-blue-500 hover:bg-blue-600"
+          onClick={() => {
+            initAudio()
+            speakMessage("This is a test of the speech system. If you can hear this, speech is working correctly.")
+          }}
+        >
+          Test Speech
+        </button>
+
         {lastMessage && (
           <div className="p-4 bg-slate-100 rounded-lg">
             <h3 className="font-medium mb-1">Last Guidance:</h3>
@@ -1135,5 +1160,3 @@ const NavigationAssistant = () => {
     </div>
   )
 }
-
-export default NavigationAssistant
