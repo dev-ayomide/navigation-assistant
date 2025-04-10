@@ -949,7 +949,7 @@ const NavigationAssistant = () => {
         </button>
 
         {/* Enhanced test speech section */}
-        {/* <div className="p-4 bg-blue-50 rounded-lg">
+        <div className="p-4 bg-blue-50 rounded-lg">
           <h3 className="font-medium mb-2">Speech Test</h3>
           <p className="text-sm mb-3">
             If the app isn't speaking, tap the button below to test speech functionality. This will help diagnose any
@@ -977,7 +977,7 @@ const NavigationAssistant = () => {
               </span>
             </div>
           </div>
-        </div> */}
+        </div>
 
         {lastMessage && (
           <div className="p-4 bg-slate-100 rounded-lg">
