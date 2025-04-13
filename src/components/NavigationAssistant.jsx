@@ -18,6 +18,12 @@ const NavigationAssistant = () => {
   const [isReconnecting, setIsReconnecting] = useState(false)
   const [speechStatus, setSpeechStatus] = useState("Not tested")
 
+  // Add these state variables after the other state declarations
+  const [processingTime, setProcessingTime] = useState(null)
+  const [lastRequestTime, setLastRequestTime] = useState(null)
+  const [avgProcessingTime, setAvgProcessingTime] = useState(null)
+  const [processingTimes, setProcessingTimes] = useState([])
+
   const videoRef = useRef(null)
   const streamRef = useRef(null)
   const socketRef = useRef(null)
@@ -162,10 +168,29 @@ const NavigationAssistant = () => {
           }, 3000)
         })
 
+        // Modify the socket.on("server_response") handler in the connectSocket function
+        // Find this section in the useEffect for socket connection:
         socket.on("server_response", (data) => {
           console.log("Received API response:", data)
           const message = data.message || "No guidance available"
           setLastMessage(message)
+
+          // Calculate processing time
+          const responseTime = Date.now()
+          if (lastRequestTime) {
+            const currentProcessingTime = responseTime - lastRequestTime
+            console.log(`Backend processing time: ${currentProcessingTime}ms`)
+
+            // Update processing time state
+            setProcessingTime(currentProcessingTime)
+
+            // Update average processing time
+            const newTimes = [...processingTimes, currentProcessingTime].slice(-10) // Keep last 10 times
+            setProcessingTimes(newTimes)
+            const avg = newTimes.reduce((sum, time) => sum + time, 0) / newTimes.length
+            setAvgProcessingTime(Math.round(avg))
+          }
+
           speakMessage(message)
         })
 
@@ -213,7 +238,7 @@ const NavigationAssistant = () => {
 
       setIsReconnecting(false)
     }
-  }, [isActive, connectionAttempts])
+  }, [isActive, connectionAttempts, lastRequestTime, processingTimes])
 
   // Add network status monitoring for mobile devices
   useEffect(() => {
@@ -380,8 +405,15 @@ const NavigationAssistant = () => {
         await new Promise((res) => setTimeout(res, isMobile ? 400 : 300))
       }
 
+      // Modify the captureAndSendFiveFrames function to record the request time
+      // Find the section where frames are sent to the API:
       console.log("Sending batch of", frames.length, "frames to API")
       if (socketRef.current && socketRef.current.connected) {
+        // Record the time when frames are sent
+        const requestTime = Date.now()
+        setLastRequestTime(requestTime)
+        console.log(`Sending frames at: ${requestTime}`)
+
         socketRef.current.emit("send_frames_batch", { frames: frames })
       } else {
         console.error("Socket not connected, can't send frames")
@@ -1062,6 +1094,54 @@ const NavigationAssistant = () => {
         >
           Initialize Speech
         </button>
+
+        {/* You can remove the test speech section if you want, or keep it */}
+        {/* Enhanced test speech section */}
+        <div className="p-4 bg-blue-50 rounded-lg">
+          <h3 className="font-medium mb-2">Speech Test</h3>
+          <p className="text-sm mb-3">
+            If the app isn't speaking, tap the button below to test speech functionality. This will help diagnose any
+            issues with your device's speech capabilities.
+          </p>
+          <div className="flex flex-col gap-2">
+            <button
+              className="w-full py-3 text-base font-medium rounded-md text-white bg-blue-500 hover:bg-blue-600 active:bg-blue-700"
+              onClick={handleTestSpeech}
+            >
+              Test Speech Now
+            </button>
+            <div className="text-sm mt-1">
+              Status:{" "}
+              <span
+                className={
+                  speechStatus.includes("Success")
+                    ? "text-green-600 font-medium"
+                    : speechStatus.includes("Error")
+                      ? "text-red-600 font-medium"
+                      : "text-blue-600 font-medium"
+                }
+              >
+                {speechStatus}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {processingTime !== null && (
+          <div className="p-4 bg-yellow-50 rounded-lg">
+            <h3 className="font-medium mb-1">Processing Times:</h3>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <p className="text-sm text-gray-600">Last request:</p>
+                <p className="font-medium">{processingTime} ms</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-600">Average (last 10):</p>
+                <p className="font-medium">{avgProcessingTime || "-"} ms</p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {lastMessage && (
           <div className="p-4 bg-slate-100 rounded-lg">
