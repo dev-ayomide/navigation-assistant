@@ -17,12 +17,6 @@ const NavigationAssistant = () => {
   const [connectionAttempts, setConnectionAttempts] = useState(0)
   const [isReconnecting, setIsReconnecting] = useState(false)
   const [speechStatus, setSpeechStatus] = useState("Not tested")
-  const [processingStartTime, setProcessingStartTime] = useState(null)
-  const [processingEndTime, setProcessingEndTime] = useState(null)
-  const [processingTime, setProcessingTime] = useState(null)
-  const [requestStartTime, setRequestStartTime] = useState(null)
-  const [requestEndTime, setRequestEndTime] = useState(null)
-  const [requestTime, setRequestTime] = useState(null)
 
   const videoRef = useRef(null)
   const streamRef = useRef(null)
@@ -170,14 +164,6 @@ const NavigationAssistant = () => {
 
         socket.on("server_response", (data) => {
           console.log("Received API response:", data)
-
-          // Set processing end time and calculate duration
-          if (processingStartTime) {
-            const endProcessingTime = performance.now()
-            setProcessingEndTime(endProcessingTime)
-            setProcessingTime(endProcessingTime - processingStartTime)
-          }
-
           const message = data.message || "No guidance available"
           setLastMessage(message)
           speakMessage(message)
@@ -227,7 +213,7 @@ const NavigationAssistant = () => {
 
       setIsReconnecting(false)
     }
-  }, [isActive, connectionAttempts, processingStartTime])
+  }, [isActive, connectionAttempts])
 
   // Add network status monitoring for mobile devices
   useEffect(() => {
@@ -383,10 +369,6 @@ const NavigationAssistant = () => {
       isCapturingRef.current = true
       console.log("Starting to capture frames")
 
-      // Set request start time
-      const startRequestTime = performance.now()
-      setRequestStartTime(startRequestTime)
-
       const frames = []
       // Capture fewer frames on mobile for better performance
       const frameCount = isMobile ? 3 : 5
@@ -398,17 +380,8 @@ const NavigationAssistant = () => {
         await new Promise((res) => setTimeout(res, isMobile ? 400 : 300))
       }
 
-      // Set request end time and calculate duration
-      const endRequestTime = performance.now()
-      setRequestEndTime(endRequestTime)
-      setRequestTime(endRequestTime - startRequestTime)
-
       console.log("Sending batch of", frames.length, "frames to API")
       if (socketRef.current && socketRef.current.connected) {
-        // Set processing start time
-        const startProcessingTime = performance.now()
-        setProcessingStartTime(startProcessingTime)
-
         socketRef.current.emit("send_frames_batch", { frames: frames })
       } else {
         console.error("Socket not connected, can't send frames")
@@ -1121,14 +1094,6 @@ const NavigationAssistant = () => {
             </div>
           </div>
         </div>
-
-        {(processingTime || requestTime) && (
-          <div className="p-4 bg-gray-100 rounded-lg">
-            <h3 className="font-medium mb-1">Performance Metrics:</h3>
-            {requestTime && <p className="text-sm">Image Capture Time: {requestTime.toFixed(2)} ms</p>}
-            {processingTime && <p className="text-sm">Backend Processing Time: {processingTime.toFixed(2)} ms</p>}
-          </div>
-        )}
 
         {lastMessage && (
           <div className="p-4 bg-slate-100 rounded-lg">
