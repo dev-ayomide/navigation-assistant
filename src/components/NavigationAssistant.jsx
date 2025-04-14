@@ -18,12 +18,34 @@ const NavigationAssistant = () => {
   const [isReconnecting, setIsReconnecting] = useState(false)
   const [speechStatus, setSpeechStatus] = useState("Not tested")
 
+  // Performance metrics state
+  const [performanceMetrics, setPerformanceMetrics] = useState([])
+  const [showPerformanceMetrics, setShowPerformanceMetrics] = useState(false)
+  const [performanceSummary, setPerformanceSummary] = useState({
+    avgUploadTime: 0,
+    avgProcessingTime: 0,
+    avgDownloadTime: 0,
+    avgTotalTime: 0,
+    totalFrames: 0,
+  })
+
+  // Add these state variables after the other state declarations (around line 20)
+  const [processingTimes, setProcessingTimes] = useState([])
+  const [currentProcessingTime, setCurrentProcessingTime] = useState(null)
+  const [averageProcessingTime, setAverageProcessingTime] = useState(null)
+  const frameTimestampsRef = useRef({})
+
   const videoRef = useRef(null)
   const streamRef = useRef(null)
   const socketRef = useRef(null)
   const isCapturingRef = useRef(false)
   const utteranceRef = useRef(null)
   const reconnectTimeoutRef = useRef(null)
+
+  // Performance tracking refs
+  const pendingUploadsRef = useRef(new Map())
+  const pendingProcessingRef = useRef(new Map())
+  const maxMetricsRef = useRef(100) // Store up to 100 metrics
 
   // API endpoint configuration
   const API_ENDPOINT = "https://see-for-me-api-production.up.railway.app"
@@ -162,8 +184,45 @@ const NavigationAssistant = () => {
           }, 3000)
         })
 
+        // Modified server_response handler with performance tracking
         socket.on("server_response", (data) => {
           console.log("Received API response:", data)
+
+          // Calculate processing time if we have a frameId
+          if (data.frameId && frameTimestampsRef.current[data.frameId]) {
+            const endTime = performance.now()
+            const startTime = frameTimestampsRef.current[data.frameId].sendTime
+            const processingTime = endTime - startTime
+
+            // Update processing times
+            setProcessingTimes((prev) => {
+              const newTimes = [...prev, processingTime]
+              // Keep only the last 10 times
+              if (newTimes.length > 10) {
+                return newTimes.slice(-10)
+              }
+              return newTimes
+            })
+
+            // Update current processing time
+            setCurrentProcessingTime(`${processingTime.toFixed(0)} ms`)
+
+            // Calculate and update average time
+            setAverageProcessingTime((prev) => {
+              const newTimes = [...(prev ? processingTimes : []), processingTime]
+              return calculateAverageTime(newTimes).toFixed(0)
+            })
+
+            // Clean up the timestamp reference
+            delete frameTimestampsRef.current[data.frameId]
+          }
+
+          // Check if response contains performance data
+          if (data.frameId && pendingProcessingRef.current.has(data.frameId)) {
+            // Complete the performance tracking for this frame
+            completeOperation(data.frameId, data.processingTime)
+          }
+
           const message = data.message || "No guidance available"
           setLastMessage(message)
           speakMessage(message)
@@ -289,6 +348,100 @@ const NavigationAssistant = () => {
     }
   }, [])
 
+  // Add these functions after the device detection useEffect
+
+  // Calculate performance summary
+  useEffect(() => {
+    if (performanceMetrics.length > 0) {
+      const totalFrames = performanceMetrics.length
+      const avgUploadTime = performanceMetrics.reduce((sum, metric) => sum + metric.uploadTime, 0) / totalFrames
+      const avgProcessingTime = performanceMetrics.reduce((sum, metric) => sum + metric.processingTime, 0) / totalFrames
+      const avgDownloadTime = performanceMetrics.reduce((sum, metric) => sum + metric.downloadTime, 0) / totalFrames
+      const avgTotalTime = performanceMetrics.reduce((sum, metric) => sum + metric.totalTime, 0) / totalFrames
+
+      setPerformanceSummary({
+        avgUploadTime,
+        avgProcessingTime,
+        avgDownloadTime,
+        avgTotalTime,
+        totalFrames,
+      })
+    }
+  }, [performanceMetrics])
+
+  // Performance tracking functions
+  const startUpload = (frameId, size) => {
+    pendingUploadsRef.current.set(frameId, {
+      startTime: performance.now(),
+      size,
+    })
+    return frameId
+  }
+
+  const completeUpload = (frameId) => {
+    const upload = pendingUploadsRef.current.get(frameId)
+    if (!upload) return
+
+    const uploadTime = performance.now() - upload.startTime
+    pendingProcessingRef.current.set(frameId, {
+      startTime: performance.now(),
+      uploadTime,
+      size: upload.size,
+    })
+
+    pendingUploadsRef.current.delete(frameId)
+  }
+
+  const completeOperation = (frameId, serverProcessingTime = 0) => {
+    const processing = pendingProcessingRef.current.get(frameId)
+    if (!processing) return
+
+    const endTime = performance.now()
+    const clientProcessingTime = endTime - processing.startTime
+    const processingTime = serverProcessingTime || clientProcessingTime
+    const downloadTime = clientProcessingTime - processingTime > 0 ? clientProcessingTime - processingTime : 0
+    const totalTime = processing.uploadTime + processingTime + downloadTime
+
+    const newMetric = {
+      id: frameId,
+      timestamp: Date.now(),
+      uploadTime: processing.uploadTime,
+      processingTime,
+      downloadTime,
+      totalTime,
+      frameSize: processing.size,
+      networkQuality: assessNetworkQuality(processing.uploadTime),
+    }
+
+    setPerformanceMetrics((prev) => {
+      const updated = [...prev, newMetric]
+      // Keep only the last maxMetrics
+      return updated.length > maxMetricsRef.current ? updated.slice(-maxMetricsRef.current) : updated
+    })
+
+    pendingProcessingRef.current.delete(frameId)
+    return newMetric
+  }
+
+  const assessNetworkQuality = (uploadTime) => {
+    if (uploadTime < 100) return "Good"
+    if (uploadTime < 300) return "Fair"
+    return "Poor"
+  }
+
+  const clearPerformanceMetrics = () => {
+    setPerformanceMetrics([])
+    pendingUploadsRef.current.clear()
+    pendingProcessingRef.current.clear()
+  }
+
+  // Add this function to calculate average processing time (after other utility functions)
+  const calculateAverageTime = (times) => {
+    if (times.length === 0) return 0
+    const sum = times.reduce((acc, time) => acc + time, 0)
+    return sum / times.length
+  }
+
   // Add this useEffect to initialize speech synthesis as early as possible
   // Add this after the device detection useEffect
   useEffect(() => {
@@ -382,7 +535,26 @@ const NavigationAssistant = () => {
 
       console.log("Sending batch of", frames.length, "frames to API")
       if (socketRef.current && socketRef.current.connected) {
-        socketRef.current.emit("send_frames_batch", { frames: frames })
+        // Generate a unique ID for this batch of frames
+        const frameId = `frame-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+
+        // Start timing when we send the frames
+        frameTimestampsRef.current[frameId] = {
+          sendTime: performance.now(),
+          size: frames.reduce((sum, frame) => sum + frame.byteLength, 0),
+        }
+
+        // Set current processing time to null to indicate processing has started
+        setCurrentProcessingTime("Processing...")
+
+        // Send frames with the ID
+        socketRef.current.emit("send_frames_batch", {
+          frames: frames,
+          frameId: frameId,
+          timestamp: Date.now(),
+        })
+        // Mark upload as complete
+        completeUpload(frameId)
       } else {
         console.error("Socket not connected, can't send frames")
         // Try to reconnect if we're not connected
@@ -674,6 +846,9 @@ const NavigationAssistant = () => {
     setIsActive(newState)
 
     if (newState) {
+      // Reset performance metrics when starting
+      clearPerformanceMetrics()
+
       // Initialize audio context to help with mobile audio restrictions
       initAudio()
 
@@ -913,6 +1088,153 @@ const NavigationAssistant = () => {
     }
   }
 
+  // Add the performance metrics dashboard component
+  const PerformanceMetricsDashboard = () => {
+    if (!showPerformanceMetrics) return null
+
+    // Calculate additional stats
+    const maxTotalTime = performanceMetrics.length > 0 ? Math.max(...performanceMetrics.map((m) => m.totalTime)) : 0
+
+    const minTotalTime = performanceMetrics.length > 0 ? Math.min(...performanceMetrics.map((m) => m.totalTime)) : 0
+
+    // Get the last 10 metrics for recent performance
+    const recentMetrics = performanceMetrics.slice(-10)
+
+    return (
+      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 overflow-y-auto">
+        <div className="bg-white rounded-lg w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+          <div className="p-4 border-b flex justify-between items-center">
+            <div>
+              <h2 className="text-xl font-bold">Performance Metrics Dashboard</h2>
+              <p className="text-sm text-gray-500">Monitoring image upload, processing, and download times</p>
+            </div>
+            <button
+              className="px-3 py-1 bg-gray-200 hover:bg-gray-300 rounded-md text-sm"
+              onClick={() => setShowPerformanceMetrics(false)}
+            >
+              Close
+            </button>
+          </div>
+
+          <div className="p-4">
+            {performanceMetrics.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12">
+                <div className="h-12 w-12 text-gray-300 mb-4">⏱️</div>
+                <p className="text-gray-500">No performance data available yet</p>
+                <p className="text-gray-400 text-sm mt-2">
+                  Start the navigation assistant to collect performance metrics
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                  <div className="bg-slate-50 p-4 rounded-lg">
+                    <h3 className="text-sm font-medium text-gray-500 mb-1">Average Times (ms)</h3>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <p className="text-xs text-gray-500">Upload</p>
+                        <p className="text-xl font-semibold">{performanceSummary.avgUploadTime.toFixed(2)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">Processing</p>
+                        <p className="text-xl font-semibold">{performanceSummary.avgProcessingTime.toFixed(2)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">Download</p>
+                        <p className="text-xl font-semibold">{performanceSummary.avgDownloadTime.toFixed(2)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">Total</p>
+                        <p className="text-xl font-semibold">{performanceSummary.avgTotalTime.toFixed(2)}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-50 p-4 rounded-lg">
+                    <h3 className="text-sm font-medium text-gray-500 mb-1">Summary</h3>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <p className="text-xs text-gray-500">Total Frames</p>
+                        <p className="text-xl font-semibold">{performanceSummary.totalFrames}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">Min Time (ms)</p>
+                        <p className="text-xl font-semibold">{minTotalTime.toFixed(2)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">Max Time (ms)</p>
+                        <p className="text-xl font-semibold">{maxTotalTime.toFixed(2)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">Last Frame</p>
+                        <p className="text-xl font-semibold">
+                          {performanceMetrics.length > 0
+                            ? new Date(performanceMetrics[performanceMetrics.length - 1].timestamp).toLocaleTimeString()
+                            : "-"}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="overflow-auto max-h-60 bg-slate-50 p-4 rounded-lg mb-4">
+                  <h3 className="text-sm font-medium text-gray-500 mb-4">Recent Performance Data (Last 10 Frames)</h3>
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Frame
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Time
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Upload (ms)
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Processing (ms)
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Download (ms)
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Total (ms)
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {recentMetrics.map((metric, index) => (
+                        <tr key={metric.id}>
+                          <td className="px-3 py-2 whitespace-nowrap text-xs">
+                            {performanceMetrics.length - recentMetrics.length + index + 1}
+                          </td>
+                          <td className="px-3 py-2 whitespace-nowrap text-xs">
+                            {new Date(metric.timestamp).toLocaleTimeString()}
+                          </td>
+                          <td className="px-3 py-2 whitespace-nowrap text-xs">{metric.uploadTime.toFixed(2)}</td>
+                          <td className="px-3 py-2 whitespace-nowrap text-xs">{metric.processingTime.toFixed(2)}</td>
+                          <td className="px-3 py-2 whitespace-nowrap text-xs">{metric.downloadTime.toFixed(2)}</td>
+                          <td className="px-3 py-2 whitespace-nowrap text-xs">{metric.totalTime.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <button
+                  className="w-full py-3 bg-gray-200 hover:bg-gray-300 rounded-md text-sm"
+                  onClick={clearPerformanceMetrics}
+                >
+                  Clear Performance Metrics
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   // Modify the return statement to include a hidden button that can be programmatically clicked
   // Add this to the return statement, right after the main button
   return (
@@ -951,6 +1273,34 @@ const NavigationAssistant = () => {
             </label>
             <span className="text-lg font-medium">{isActive ? "Active" : "Inactive"}</span>
           </div>
+
+          {/* Performance metrics button */}
+          <button
+            className="flex items-center gap-1 px-3 py-1 bg-slate-100 hover:bg-slate-200 rounded-md text-sm"
+            onClick={() => setShowPerformanceMetrics(true)}
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <line x1="18" y1="20" x2="18" y2="10"></line>
+              <line x1="12" y1="20" x2="12" y2="4"></line>
+              <line x1="6" y1="20" x2="6" y2="14"></line>
+            </svg>
+            <span>Metrics</span>
+            {performanceMetrics.length > 0 && (
+              <span className="ml-1 bg-slate-200 text-slate-700 rounded-full px-1.5 py-0.5 text-xs">
+                {performanceMetrics.length}
+              </span>
+            )}
+          </button>
         </div>
 
         {/* Larger camera view - taking up more screen space */}
@@ -1095,6 +1445,21 @@ const NavigationAssistant = () => {
           </div>
         </div>
 
+        {/* Processing time display */}
+        <div className="p-4 bg-slate-100 rounded-lg">
+          <h3 className="font-medium mb-1">Image Processing Times:</h3>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <p className="text-sm text-gray-500">Current:</p>
+              <p className="text-lg font-medium">{currentProcessingTime || "N/A"}</p>
+            </div>
+            <div>
+              <p className="text-sm text-gray-500">Average (last 10):</p>
+              <p className="text-lg font-medium">{averageProcessingTime ? `${averageProcessingTime} ms` : "N/A"}</p>
+            </div>
+          </div>
+        </div>
+
         {lastMessage && (
           <div className="p-4 bg-slate-100 rounded-lg">
             <h3 className="font-medium mb-1">Last Guidance:</h3>
@@ -1102,6 +1467,8 @@ const NavigationAssistant = () => {
           </div>
         )}
       </div>
+
+      <PerformanceMetricsDashboard />
     </div>
   )
 }
