@@ -10,342 +10,161 @@ const NavigationAssistant = () => {
   const [lastMessage, setLastMessage] = useState("")
   const [error, setError] = useState(null)
   const [isMobile, setIsMobile] = useState(false)
-  const [isIOS, setIsIOS] = useState(false)
-  const [isAndroid, setIsAndroid] = useState(false)
-  const [cameraPermissionRequested, setCameraPermissionRequested] = useState(false)
-  const [apiStatus, setApiStatus] = useState("Checking...")
-  const [connectionAttempts, setConnectionAttempts] = useState(0)
-  const [isReconnecting, setIsReconnecting] = useState(false)
-  const [speechStatus, setSpeechStatus] = useState("Not tested")
+  const [responseTime, setResponseTime] = useState(null)
 
   const videoRef = useRef(null)
   const streamRef = useRef(null)
   const socketRef = useRef(null)
   const isCapturingRef = useRef(false)
   const utteranceRef = useRef(null)
-  const reconnectTimeoutRef = useRef(null)
+  const requestTimestampRef = useRef(null)
+  const audioContextRef = useRef(null)
 
-  // API endpoint configuration
-  const API_ENDPOINT = "https://see-for-me-api-production.up.railway.app"
+  // Helper function to detect iOS devices
+  const isIOS = () => {
+    return (
+      /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+    )
+  }
 
-  // Check API status on component mount
-  useEffect(() => {
-    const checkApiStatus = async () => {
-      try {
-        console.log("Checking API status at:", API_ENDPOINT)
-
-        // First try a simple fetch to test connectivity
-        const response = await fetch(`${API_ENDPOINT}/socket.io/?EIO=4&transport=polling`, {
-          method: "GET",
-          mode: "cors",
-          cache: "no-cache",
-        })
-
-        if (response.ok || response.status === 200) {
-          console.log("API connectivity test successful")
-          setApiStatus("Online")
-          setError(null)
-        } else {
-          console.error("API connectivity test failed with status:", response.status)
-          setApiStatus("Error")
-          setError("API is not responding correctly. Some features may not work.")
-        }
-      } catch (err) {
-        console.error("API connectivity test failed with error:", err)
-        setApiStatus("Offline")
-        setError("Cannot connect to the API server. Please check your internet connection.")
-      }
-    }
-
-    checkApiStatus()
-  }, [])
-
-  // Socket.IO connection - connect to backend API with improved stability for mobile
+  // Socket.IO connection - connect to your Flask server
   useEffect(() => {
     if (!isActive) return
 
-    // Clear any existing reconnection timeout
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current)
-      reconnectTimeoutRef.current = null
-    }
+    const socket = io("https://see-for-me-api-production.up.railway.app/")
+    socketRef.current = socket
 
-    // Disconnect any existing socket
-    if (socketRef.current) {
-      socketRef.current.disconnect()
+    socket.on("connect", () => {
+      setIsConnected(true)
+      setError(null)
+      console.log("Socket connected to Flask server")
+    })
+
+    socket.on("disconnect", () => {
+      setIsConnected(false)
+      console.log("Socket disconnected from Flask server")
+    })
+
+    socket.on("connect_error", (err) => {
+      console.error("Socket connection error:", err)
+      setError("Connection error. Please try again.")
+      setIsConnected(false)
+    })
+
+    socket.on("server_response", (data) => {
+      console.log("Received server response:", data)
+      const message = data.message || "No guidance available"
+      setLastMessage(message)
+      speakMessage(message)
+
+      // Play completion sound
+      playCompletionSound()
+
+      // Trigger haptic feedback for completion if available
+      if (navigator.vibrate) {
+        navigator.vibrate([100, 50, 200])
+      }
+
+      // Calculate response time in seconds
+      if (requestTimestampRef.current) {
+        const elapsedTime = (Date.now() - requestTimestampRef.current) / 1000 // Convert to seconds
+        setResponseTime(elapsedTime.toFixed(2)) // Format to 2 decimal places
+        console.log(`Response time: ${elapsedTime.toFixed(2)} seconds`)
+      }
+    })
+
+    return () => {
+      socket.disconnect()
       socketRef.current = null
     }
+  }, [isActive])
 
-    const connectSocket = () => {
-      try {
-        setIsReconnecting(true)
-        console.log(`Connecting to API at: ${API_ENDPOINT} (Attempt ${connectionAttempts + 1})`)
-
-        // Create socket with optimized options for mobile stability
-        const socket = io(API_ENDPOINT, {
-          reconnectionAttempts: 10,
-          reconnectionDelay: 1000,
-          reconnectionDelayMax: 5000,
-          timeout: 20000,
-          transports: ["websocket", "polling"],
-          upgrade: true,
-          forceNew: true,
-          secure: true,
-          rejectUnauthorized: false,
-          withCredentials: false,
-          autoConnect: true,
-          perMessageDeflate: true,
-          pingTimeout: 30000,
-          pingInterval: 25000,
-        })
-
-        socketRef.current = socket
-
-        socket.on("connect", () => {
-          console.log("Socket.IO connected successfully to API!")
-          setIsConnected(true)
-          setIsReconnecting(false)
-          setConnectionAttempts(0)
-          setError(null)
-        })
-
-        socket.on("disconnect", (reason) => {
-          console.log("Socket.IO disconnected from API. Reason:", reason)
-          setIsConnected(false)
-
-          // Don't attempt to reconnect if we're not active anymore
-          if (!isActive) return
-
-          // If it's a server disconnect or transport close, try to reconnect
-          if (reason === "io server disconnect" || reason === "transport close") {
-            setIsReconnecting(true)
-
-            // Increment connection attempts
-            setConnectionAttempts((prev) => prev + 1)
-
-            // If we've tried too many times, show an error
-            if (connectionAttempts >= 5) {
-              setError("Connection unstable. Please check your internet connection and try again.")
-              setIsReconnecting(false)
-              return
-            }
-
-            // Try to reconnect after a delay
-            reconnectTimeoutRef.current = setTimeout(() => {
-              console.log("Attempting to reconnect...")
-              if (socketRef.current) {
-                socketRef.current.connect()
-              }
-            }, 3000)
-          }
-        })
-
-        socket.on("connect_error", (err) => {
-          console.error("Socket.IO connection error:", err)
-          setIsConnected(false)
-          setIsReconnecting(true)
-
-          // Increment connection attempts
-          setConnectionAttempts((prev) => prev + 1)
-
-          // If we've tried too many times, show an error
-          if (connectionAttempts >= 5) {
-            setError(`Connection error: Cannot connect to API server. Please check your internet connection.`)
-            setIsReconnecting(false)
-            return
-          }
-
-          // Try to reconnect after a delay
-          reconnectTimeoutRef.current = setTimeout(() => {
-            console.log("Attempting to reconnect after error...")
-            connectSocket()
-          }, 3000)
-        })
-
-        socket.on("server_response", (data) => {
-          console.log("Received API response:", data)
-          const message = data.message || "No guidance available"
-          setLastMessage(message)
-          speakMessage(message)
-        })
-
-        // Set a timeout for initial connection
-        const connectionTimeout = setTimeout(() => {
-          if (socket.connected) return
-          console.error("Socket.IO initial connection timeout")
-
-          // If we're not connected after the timeout, try to reconnect
-          setConnectionAttempts((prev) => prev + 1)
-
-          if (connectionAttempts >= 5) {
-            setError(`Connection timeout: Could not connect to API server. Please check your internet connection.`)
-            setIsReconnecting(false)
-            return
-          }
-
-          setIsReconnecting(true)
-          connectSocket()
-        }, 10000)
-
-        return () => {
-          clearTimeout(connectionTimeout)
-        }
-      } catch (err) {
-        console.error("Error creating Socket.IO connection:", err)
-        setError(`Connection error: ${err.message}. Please check your internet connection.`)
-        setIsReconnecting(false)
-      }
-    }
-
-    connectSocket()
-
-    // Cleanup function
-    return () => {
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current)
-        reconnectTimeoutRef.current = null
-      }
-
-      if (socketRef.current) {
-        socketRef.current.disconnect()
-        socketRef.current = null
-      }
-
-      setIsReconnecting(false)
-    }
-  }, [isActive, connectionAttempts])
-
-  // Add network status monitoring for mobile devices
+  // Initialize Audio Context for feedback sounds
   useEffect(() => {
-    const handleOnline = () => {
-      console.log("Network is online")
-      if (isActive && !isConnected) {
-        // If we're active but not connected, try to reconnect
-        if (socketRef.current) {
-          socketRef.current.connect()
-        }
+    // Initialize AudioContext on first user interaction to comply with browser policies
+    const initAudioContext = () => {
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)()
       }
     }
 
-    const handleOffline = () => {
-      console.log("Network is offline")
-      setError("Network connection lost. Please check your internet connection.")
-      setIsConnected(false)
+    // Add event listeners for user interaction
+    const handleUserInteraction = () => {
+      initAudioContext()
+      // Remove event listeners after initialization
+      document.removeEventListener("click", handleUserInteraction)
+      document.removeEventListener("touchstart", handleUserInteraction)
     }
 
-    window.addEventListener("online", handleOnline)
-    window.addEventListener("offline", handleOffline)
+    document.addEventListener("click", handleUserInteraction)
+    document.addEventListener("touchstart", handleUserInteraction)
 
     return () => {
-      window.removeEventListener("online", handleOnline)
-      window.removeEventListener("offline", handleOffline)
-    }
-  }, [isActive, isConnected])
-
-  // Detect device type
-  useEffect(() => {
-    const detectDevice = () => {
-      const userAgent = navigator.userAgent || navigator.vendor || window.opera || ""
-
-      // Check for iOS devices
-      const isIOSDevice =
-        /iphone|ipad|ipod/i.test(userAgent.toLowerCase()) ||
-        (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
-
-      // Check for Android devices
-      const isAndroidDevice = /android/i.test(userAgent.toLowerCase())
-
-      // More comprehensive mobile detection
-      const isMobileDevice =
-        isIOSDevice ||
-        isAndroidDevice ||
-        /webos|blackberry|iemobile|opera mini/i.test(userAgent.toLowerCase()) ||
-        (window.innerWidth <= 768 && "ontouchstart" in window) ||
-        navigator.maxTouchPoints > 1
-
-      setIsMobile(isMobileDevice)
-      setIsIOS(isIOSDevice)
-      setIsAndroid(isAndroidDevice)
-
-      console.log(
-        "Device detected as:",
-        isIOSDevice
-          ? "iOS mobile"
-          : isAndroidDevice
-            ? "Android mobile"
-            : isMobileDevice
-              ? "Other mobile"
-              : "desktop/laptop",
-      )
-    }
-
-    detectDevice()
-
-    // Also detect on resize in case of orientation changes
-    window.addEventListener("resize", detectDevice)
-
-    return () => {
-      window.removeEventListener("resize", detectDevice)
+      document.removeEventListener("click", handleUserInteraction)
+      document.removeEventListener("touchstart", handleUserInteraction)
+      if (audioContextRef.current) {
+        audioContextRef.current.close()
+      }
     }
   }, [])
 
-  // Add this useEffect to initialize speech synthesis as early as possible
-  // Add this after the device detection useEffect
-  useEffect(() => {
-    // Try to initialize speech synthesis as early as possible
-    if (window.speechSynthesis) {
-      console.log("Pre-loading speech synthesis voices")
+  // Play start sound function
+  const playStartSound = () => {
+    if (!audioContextRef.current) return
 
-      // Force load voices
-      const voices = window.speechSynthesis.getVoices()
-      console.log("Available voices:", voices.length)
+    const oscillator = audioContextRef.current.createOscillator()
+    const gainNode = audioContextRef.current.createGain()
 
-      // Set up voice changed event listener
-      if (speechSynthesis.onvoiceschanged !== undefined) {
-        speechSynthesis.onvoiceschanged = () => {
-          const updatedVoices = window.speechSynthesis.getVoices()
-          console.log("Voices loaded:", updatedVoices.length)
-        }
-      }
+    oscillator.type = "sine"
+    oscillator.frequency.setValueAtTime(440, audioContextRef.current.currentTime) // A4 note
+    oscillator.frequency.exponentialRampToValueAtTime(880, audioContextRef.current.currentTime + 0.2) // Ramp up to A5
 
-      // For iOS, we need to periodically "ping" the speech synthesis
-      // to prevent it from going to sleep
-      let speechKeepAliveInterval
+    gainNode.gain.setValueAtTime(0.3, audioContextRef.current.currentTime)
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContextRef.current.currentTime + 0.3)
 
-      if (isIOS) {
-        speechKeepAliveInterval = setInterval(() => {
-          if (!isSpeaking) {
-            // This helps keep the system active on iOS
-            speechSynthesis.cancel()
-          }
-        }, 10000)
-      }
+    oscillator.connect(gainNode)
+    gainNode.connect(audioContextRef.current.destination)
 
-      return () => {
-        if (speechSynthesis.onvoiceschanged !== undefined) {
-          speechSynthesis.onvoiceschanged = null
-        }
+    oscillator.start()
+    oscillator.stop(audioContextRef.current.currentTime + 0.3)
+  }
 
-        if (speechKeepAliveInterval) {
-          clearInterval(speechKeepAliveInterval)
-        }
-      }
-    }
-  }, [isIOS, isSpeaking])
+  // Play completion sound function
+  const playCompletionSound = () => {
+    if (!audioContextRef.current) return
 
-  // Capture frame function - optimized for mobile performance
-  async function captureFrame(videoElement) {
+    const oscillator = audioContextRef.current.createOscillator()
+    const gainNode = audioContextRef.current.createGain()
+
+    oscillator.type = "sine"
+    oscillator.frequency.setValueAtTime(880, audioContextRef.current.currentTime) // A5 note
+    oscillator.frequency.exponentialRampToValueAtTime(440, audioContextRef.current.currentTime + 0.3) // Ramp down to A4
+
+    gainNode.gain.setValueAtTime(0.3, audioContextRef.current.currentTime)
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContextRef.current.currentTime + 0.4)
+
+    oscillator.connect(gainNode)
+    gainNode.connect(audioContextRef.current.destination)
+
+    oscillator.start()
+    oscillator.stop(audioContextRef.current.currentTime + 0.4)
+  }
+
+  // Capture high-quality frame function
+  async function captureHighQualityFrame(videoElement) {
     return new Promise((resolve) => {
       const canvas = document.createElement("canvas")
       const ctx = canvas.getContext("2d")
 
-      // Use smaller dimensions on mobile for better performance
-      const scaleFactor = isMobile ? 0.5 : 1.0
-      canvas.width = videoElement.videoWidth * scaleFactor
-      canvas.height = videoElement.videoHeight * scaleFactor
+      // Set to higher resolution for better quality
+      canvas.width = videoElement.videoWidth
+      canvas.height = videoElement.videoHeight
 
+      // Draw the video frame to the canvas
       ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height)
 
+      // Convert to high-quality WebP format with minimal compression
       canvas.toBlob(
         (blob) => {
           const reader = new FileReader()
@@ -353,13 +172,13 @@ const NavigationAssistant = () => {
           reader.readAsArrayBuffer(blob)
         },
         "image/webp",
-        isMobile ? 0.7 : 0.8, // Lower quality on mobile for better performance
-      )
+        0.95,
+      ) // Using 0.95 quality (higher value = better quality)
     })
   }
 
-  // Capture and send frames - optimized for mobile
-  async function captureAndSendFiveFrames(videoElement) {
+  // Capture and send two high-quality frames
+  async function captureAndSendTwoFrames(videoElement) {
     try {
       if (isSpeaking) {
         console.log("Not capturing frames because speech is in progress")
@@ -367,28 +186,32 @@ const NavigationAssistant = () => {
       }
 
       isCapturingRef.current = true
-      console.log("Starting to capture frames")
+      console.log("Starting to capture high-quality frames")
 
-      const frames = []
-      // Capture fewer frames on mobile for better performance
-      const frameCount = isMobile ? 3 : 5
-
-      for (let i = 0; i < frameCount; i++) {
-        const frame = await captureFrame(videoElement)
-        frames.push(frame)
-        // Longer delay between frames on mobile
-        await new Promise((res) => setTimeout(res, isMobile ? 400 : 300))
+      // Play start sound and trigger haptic feedback
+      playStartSound()
+      if (navigator.vibrate) {
+        navigator.vibrate(100) // Simple vibration for start
       }
 
-      console.log("Sending batch of", frames.length, "frames to API")
+      // Capture first frame
+      const frame1 = await captureHighQualityFrame(videoElement)
+
+      // Wait a moment before capturing second frame
+      await new Promise((res) => setTimeout(res, 500))
+
+      // Capture second frame
+      const frame2 = await captureHighQualityFrame(videoElement)
+
+      const frames = [frame1, frame2]
+
+      console.log("Sending batch of", frames.length, "high-quality frames to Flask server")
       if (socketRef.current && socketRef.current.connected) {
+        // Record the timestamp before sending the frames
+        requestTimestampRef.current = Date.now()
         socketRef.current.emit("send_frames_batch", { frames: frames })
       } else {
         console.error("Socket not connected, can't send frames")
-        // Try to reconnect if we're not connected
-        if (isActive && !isConnected && !isReconnecting) {
-          setConnectionAttempts((prev) => prev + 1)
-        }
       }
     } catch (err) {
       console.error("Error capturing frames:", err)
@@ -398,120 +221,73 @@ const NavigationAssistant = () => {
     }
   }
 
-  // Initialize camera with better error handling
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth <= 768)
+    }
+
+    checkMobile()
+    window.addEventListener("resize", checkMobile)
+
+    return () => {
+      window.removeEventListener("resize", checkMobile)
+    }
+  }, [])
+
+  // Initialize camera
   const initCamera = async () => {
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error("Camera access is not supported by this browser")
       }
 
-      setCameraPermissionRequested(true)
-
-      // Different camera initialization based on device type
-      if (isMobile) {
-        console.log("Mobile device detected - requesting back camera")
-
-        try {
-          // First try with environment (back camera) constraint
-          const backCameraStream = await navigator.mediaDevices.getUserMedia({
-            audio: false,
-            video: {
-              facingMode: "environment",
-              width: { ideal: 1280 },
-              height: { ideal: 720 },
-            },
-          })
-
-          if (videoRef.current) {
-            videoRef.current.srcObject = backCameraStream
-            streamRef.current = backCameraStream
-            setError(null)
-            console.log("Back camera initialized successfully")
-
-            try {
-              await videoRef.current.play()
-            } catch (playErr) {
-              console.error("Error playing back camera video:", playErr)
-            }
-          }
-          return
-        } catch (err) {
-          console.log("Could not access back camera, trying basic camera access")
-        }
-      } else {
-        // For laptops/desktops
-        console.log("Laptop/Desktop detected - requesting camera")
-
-        try {
-          const cameraStream = await navigator.mediaDevices.getUserMedia({
-            audio: false,
-            video: true,
-          })
-
-          if (videoRef.current) {
-            videoRef.current.srcObject = cameraStream
-            streamRef.current = cameraStream
-            setError(null)
-            console.log("Camera initialized successfully")
-
-            try {
-              await videoRef.current.play()
-            } catch (playErr) {
-              console.error("Error playing camera video:", playErr)
-            }
-          }
-          return
-        } catch (err) {
-          console.error("Could not access camera:", err)
-        }
+      const constraints = {
+        video: {
+          facingMode: isMobile ? "environment" : "user",
+          width: { ideal: 1920 }, // Higher resolution for better quality
+          height: { ideal: 1080 },
+        },
       }
 
-      // Last resort: try with any camera
-      console.log("Trying basic camera access as last resort")
-      const basicStream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: true,
-      })
+      const stream = await navigator.mediaDevices.getUserMedia(constraints)
 
       if (videoRef.current) {
-        videoRef.current.srcObject = basicStream
-        streamRef.current = basicStream
+        videoRef.current.srcObject = stream
+        streamRef.current = stream
         setError(null)
-        console.log("Basic camera access successful")
-
-        try {
-          await videoRef.current.play()
-        } catch (playErr) {
-          console.error("Error playing video with basic camera access:", playErr)
-        }
       }
     } catch (err) {
       console.error("Camera initialization error:", err)
-      setError("Camera access error. Please check your camera permissions.")
-      setIsActive(false)
-    }
-  }
 
-  // List available devices for debugging
-  const listAvailableDevices = async () => {
-    try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
-        console.log("enumerateDevices() not supported in this browser")
-        return
+      let errorMessage = "Camera access error"
+
+      if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+        errorMessage = "Camera access denied. Please enable camera permissions."
+      } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+        errorMessage = "No camera found on this device."
+      } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
+        errorMessage = "Camera is already in use by another application."
+      } else if (err.name === "OverconstrainedError" || err.name === "ConstraintNotSatisfiedError") {
+        errorMessage = "Camera cannot satisfy the requested constraints."
+      } else if (err.name === "NotSupportedError") {
+        errorMessage = "Camera access is not supported by this browser."
+      } else if (err.name === "TypeError" && err.message.includes("mediaDevices")) {
+        errorMessage = "Camera API not available. Try using HTTPS."
       }
 
-      const devices = await navigator.mediaDevices.enumerateDevices()
-      const videoDevices = devices.filter((device) => device.kind === "videoinput")
-
-      console.log("Available video devices:", videoDevices.length)
-    } catch (err) {
-      console.error("Error listing devices:", err)
+      setError(errorMessage)
+      setIsActive(false)
     }
   }
 
   const startCaptureCycle = () => {
     if (!isActive || !isConnected || isSpeaking || isCapturingRef.current) {
-      console.log("Not starting capture cycle")
+      console.log("Not starting capture cycle:", {
+        isActive,
+        isConnected,
+        isSpeaking,
+        isCapturing: isCapturingRef.current,
+      })
       return
     }
 
@@ -529,143 +305,91 @@ const NavigationAssistant = () => {
     }
 
     console.log("Starting capture cycle")
-    captureAndSendFiveFrames(video)
+    captureAndSendTwoFrames(video)
   }
 
-  // Speech synthesis with better error handling
   const speakMessage = (message) => {
-    if (!message) return
+    if (!message || isSpeaking) return
 
-    console.log("Attempting to speak:", message)
+    if (!window.speechSynthesis) {
+      console.error("Speech synthesis not supported")
+      setError("Text-to-speech is not supported by this browser")
+      return
+    }
 
-    try {
-      // Cancel any ongoing speech
-      window.speechSynthesis.cancel()
+    // Cancel any ongoing speech
+    window.speechSynthesis.cancel()
 
-      // Force set speaking state
-      setIsSpeaking(true)
+    setIsSpeaking(true)
+    console.log("Starting to speak:", message)
 
-      // Create a new utterance
-      const utterance = new SpeechSynthesisUtterance(message)
-      utteranceRef.current = utterance
+    const utterance = new SpeechSynthesisUtterance(message)
+    utteranceRef.current = utterance
 
-      // Set properties for better speech
-      utterance.rate = isIOS ? 1.0 : 1.0
-      utterance.pitch = 1.0
-      utterance.volume = 1.0
+    utterance.rate = 1.0
+    utterance.pitch = 1.0
+    utterance.volume = 1.0
 
-      // Get available voices
-      const voices = window.speechSynthesis.getVoices()
+    // iOS Safari requires special handling for speech synthesis
+    if (isIOS()) {
+      // For iOS, we need to speak immediately and then use a workaround to prevent premature cutting off
+      speechSynthesis.speak(utterance)
 
-      // Try to select an appropriate voice
-      if (voices && voices.length > 0) {
-        let selectedVoice = null
-
-        // For iOS, try to find a specific voice that works well
-        if (isIOS) {
-          selectedVoice = voices.find(
-            (voice) =>
-              voice.name.includes("Samantha") ||
-              voice.name.includes("Karen") ||
-              (voice.lang === "en-US" && voice.localService === true),
-          )
-        }
-        // For Android, prefer Google voices
-        else if (isAndroid) {
-          selectedVoice = voices.find(
-            (voice) =>
-              (voice.name.includes("Google") && voice.lang.includes("en")) ||
-              voice.name.includes("English United States"),
-          )
+      // iOS has a bug where it pauses speech synthesis when the page is inactive
+      // This interval keeps it active
+      const iosInterval = setInterval(() => {
+        if (speechSynthesis.paused) {
+          speechSynthesis.resume()
         }
 
-        // Fallback to any English voice
-        if (!selectedVoice) {
-          selectedVoice = voices.find(
-            (voice) => voice.lang.includes("en-US") || voice.lang.includes("en-GB") || voice.lang.includes("en"),
-          )
+        // If we're done speaking, clear the interval
+        if (!speechSynthesis.speaking) {
+          clearInterval(iosInterval)
         }
+      }, 250)
 
-        if (selectedVoice) {
-          utterance.voice = selectedVoice
-          console.log("Selected voice:", selectedVoice.name)
-        }
+      // Store the interval so we can clear it later
+      const iosIntervalId = iosInterval
+
+      utterance.onend = () => {
+        clearInterval(iosIntervalId)
+        console.log("Speech completed")
+        setIsSpeaking(false)
+        // Wait a short delay before starting next capture cycle
+        setTimeout(() => {
+          console.log("Starting next capture cycle after speech")
+          startCaptureCycle()
+        }, 500)
       }
-
-      // Handle speech completion
+    } else {
+      // Non-iOS devices can use the standard approach
       utterance.onend = () => {
         console.log("Speech completed")
         setIsSpeaking(false)
         // Wait a short delay before starting next capture cycle
-        setTimeout(startCaptureCycle, 500)
-      }
-
-      utterance.onerror = (event) => {
-        console.error("Speech synthesis error:", event)
-        setIsSpeaking(false)
-        setTimeout(startCaptureCycle, 500)
-      }
-
-      // Speak the utterance
-      speechSynthesis.speak(utterance)
-
-      // iOS-specific workaround
-      if (isIOS) {
         setTimeout(() => {
-          try {
-            speechSynthesis.pause()
-            speechSynthesis.resume()
-          } catch (e) {
-            console.error("iOS speech workaround error:", e)
-          }
-        }, 100)
+          console.log("Starting next capture cycle after speech")
+          startCaptureCycle()
+        }, 500)
       }
 
-      // Set a timeout to prevent hanging if speech doesn't complete
-      const timeoutDuration = Math.max(5000, message.length * 100)
-      setTimeout(() => {
-        if (isSpeaking) {
-          console.warn("Speech timeout reached, forcing next cycle")
-          setIsSpeaking(false)
-          startCaptureCycle()
-        }
-      }, timeoutDuration)
-    } catch (err) {
-      console.error("Speech error:", err)
+      speechSynthesis.speak(utterance)
+    }
+
+    utterance.onerror = (event) => {
+      console.error("Speech synthesis error:", event)
       setIsSpeaking(false)
       setTimeout(startCaptureCycle, 500)
     }
-  }
 
-  // Initialize audio context (helps with mobile audio restrictions)
-  const initAudio = () => {
-    try {
-      // Create a short audio context to "unlock" audio on iOS/Android
-      const AudioContext = window.AudioContext || window.webkitAudioContext
-      if (AudioContext) {
-        const audioCtx = new AudioContext()
-
-        // Create a short silent sound
-        const oscillator = audioCtx.createOscillator()
-        const gainNode = audioCtx.createGain()
-        gainNode.gain.value = 0.01 // Very quiet but not silent
-        oscillator.connect(gainNode)
-        gainNode.connect(audioCtx.destination)
-
-        // Play for a very short time
-        oscillator.start(audioCtx.currentTime)
-        oscillator.stop(audioCtx.currentTime + 0.05)
-
-        console.log("Audio context initialized")
-
-        // For iOS, we need to resume the audio context after user interaction
-        if (isIOS && audioCtx.state === "suspended") {
-          audioCtx.resume().then(() => console.log("AudioContext resumed successfully"))
-        }
+    const timeoutDuration = Math.max(5000, message.length * 100)
+    setTimeout(() => {
+      if (isSpeaking && utteranceRef.current === utterance) {
+        console.warn("Speech timeout reached, forcing next cycle")
+        setIsSpeaking(false)
+        startCaptureCycle()
       }
-    } catch (e) {
-      console.error("Could not initialize audio context:", e)
-    }
+    }, timeoutDuration)
   }
 
   // Toggle active state
@@ -674,82 +398,19 @@ const NavigationAssistant = () => {
     setIsActive(newState)
 
     if (newState) {
-      // Initialize audio context to help with mobile audio restrictions
-      initAudio()
+      initCamera()
 
-      // Initialize speech synthesis when activating - this is the key part that makes speech work
-      if (window.speechSynthesis) {
-        // Force load voices
-        window.speechSynthesis.getVoices()
-
-        // Speak a silent utterance to initialize the speech system on mobile
-        // This is crucial for iOS - it needs a speech command triggered by user interaction
-        const initUtterance = new SpeechSynthesisUtterance(" ")
-        initUtterance.volume = 0.1
-        initUtterance.onend = () => {
-          console.log("Initial speech completed - speech system initialized")
-          // Try a very short test message to fully initialize the speech system
-          const testUtterance = new SpeechSynthesisUtterance("Ready")
-          testUtterance.volume = 1.0
-          testUtterance.onend = () => {
-            console.log("Speech system fully initialized")
-          }
-          window.speechSynthesis.speak(testUtterance)
-        }
-        window.speechSynthesis.speak(initUtterance)
+      // For iOS, we need to "unsilence" the audio context with a user gesture
+      if (isIOS() && window.speechSynthesis) {
+        // Create and immediately speak a silent utterance to initialize speech synthesis
+        const silentUtterance = new SpeechSynthesisUtterance(" ")
+        silentUtterance.volume = 0
+        window.speechSynthesis.speak(silentUtterance)
       }
-
-      // Reset connection attempts
-      setConnectionAttempts(0)
-      setIsReconnecting(false)
-
-      // Check API status before proceeding
-      const checkApiStatus = async () => {
-        try {
-          console.log("Checking API status at:", API_ENDPOINT)
-
-          // First try a simple fetch to test connectivity
-          const response = await fetch(`${API_ENDPOINT}/socket.io/?EIO=4&transport=polling`, {
-            method: "GET",
-            mode: "cors",
-            cache: "no-cache",
-          })
-
-          if (response.ok || response.status === 200) {
-            console.log("API connectivity test successful")
-            setApiStatus("Online")
-            setError(null)
-          } else {
-            console.error("API connectivity test failed with status:", response.status)
-            setApiStatus("Error")
-            setError("API is not responding correctly. Some features may not work.")
-          }
-        } catch (err) {
-          console.error("API connectivity test failed with error:", err)
-          setApiStatus("Offline")
-          setError("Cannot connect to the API server. Please check your internet connection.")
-        }
-      }
-      checkApiStatus().then(() => {
-        // List available devices for debugging
-        listAvailableDevices().then(() => {
-          initCamera()
-        })
-      })
     } else {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop())
         streamRef.current = null
-      }
-
-      if (socketRef.current) {
-        socketRef.current.disconnect()
-        socketRef.current = null
-      }
-
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current)
-        reconnectTimeoutRef.current = null
       }
 
       if (window.speechSynthesis) {
@@ -757,8 +418,6 @@ const NavigationAssistant = () => {
       }
 
       setIsSpeaking(false)
-      setIsReconnecting(false)
-      setConnectionAttempts(0)
     }
   }
 
@@ -778,171 +437,41 @@ const NavigationAssistant = () => {
       }
       if (socketRef.current) {
         socketRef.current.disconnect()
-        socketRef.current = null
       }
-
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current)
-        reconnectTimeoutRef.current = null
-      }
-
       if (window.speechSynthesis) {
         window.speechSynthesis.cancel()
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close()
       }
     }
   }, [])
 
-  // Handle video click for manual camera start
-  const handleVideoClick = () => {
-    if (!videoRef.current) return
-
-    console.log("Manual video restart attempted")
-
-    if (isIOS || isAndroid) {
-      // For mobile, try to play the video
-      videoRef.current.play().catch((e) => {
-        console.error("Error playing video after manual restart:", e)
-
-        // If play fails and we're active, try reinitializing
-        if (isActive) {
-          console.log("Play failed, attempting to reinitialize camera")
-
-          // Stop any existing tracks
-          if (streamRef.current) {
-            streamRef.current.getTracks().forEach((track) => track.stop())
-            streamRef.current = null
-          }
-
-          // Clear the video source
-          videoRef.current.srcObject = null
-
-          // Try to initialize again
-          setTimeout(initCamera, 100)
-        }
-      })
-    } else {
-      // For non-mobile, just try to play
-      videoRef.current.play().catch((e) => {
-        console.error("Error playing video after manual restart:", e)
-      })
-    }
-  }
-
-  // Test speech function
-  const handleTestSpeech = () => {
-    setSpeechStatus("Testing...")
-
-    try {
-      // Initialize audio context first (important for mobile)
-      initAudio()
-
-      // Cancel any ongoing speech
-      window.speechSynthesis.cancel()
-
-      const testMessage = "This is a test of the speech system. If you can hear this, speech is working correctly."
-
-      // Create a new utterance
-      const testUtterance = new SpeechSynthesisUtterance(testMessage)
-      testUtterance.volume = 1.0
-      testUtterance.rate = 1.0
-      testUtterance.pitch = 1.0
-
-      // Set up event handlers
-      testUtterance.onstart = () => {
-        console.log("Speech started")
-        setSpeechStatus("Speaking...")
-      }
-
-      testUtterance.onend = () => {
-        console.log("Speech ended successfully")
-        setSpeechStatus("Success! Speech is working.")
-      }
-
-      testUtterance.onerror = (event) => {
-        console.error("Speech error:", event)
-        setSpeechStatus("Error: Speech failed")
-      }
-
-      // Try to select a voice
-      const voices = window.speechSynthesis.getVoices()
-      if (voices && voices.length > 0) {
-        // Try to find an English voice
-        const englishVoice = voices.find(
-          (voice) => voice.lang.includes("en-US") || voice.lang.includes("en-GB") || voice.lang.includes("en"),
-        )
-
-        if (englishVoice) {
-          testUtterance.voice = englishVoice
-        }
-      }
-
-      // Speak the utterance
-      window.speechSynthesis.speak(testUtterance)
-
-      // iOS-specific workaround
-      if (isIOS) {
-        setTimeout(() => {
-          try {
-            window.speechSynthesis.pause()
-            window.speechSynthesis.resume()
-          } catch (e) {
-            console.error("iOS speech workaround error:", e)
-          }
-        }, 100)
-      }
-    } catch (err) {
-      console.error("Test speech error:", err)
-      setSpeechStatus("Error: " + (err.message || "Unknown error"))
-    }
-  }
-
-  // Add this function to automatically trigger speech initialization
-  const triggerSpeechInit = () => {
-    if (!window.speechSynthesis) return
-
-    try {
-      // Create a silent utterance
-      const silentUtterance = new SpeechSynthesisUtterance(" ")
-      silentUtterance.volume = 0
-      silentUtterance.onend = () => {
-        console.log("Silent speech initialization complete")
-      }
-      window.speechSynthesis.speak(silentUtterance)
-    } catch (e) {
-      console.error("Error in speech initialization:", e)
-    }
-  }
-
-  // Modify the return statement to include a hidden button that can be programmatically clicked
-  // Add this to the return statement, right after the main button
   return (
-    <div className="flex flex-col gap-4 max-w-full mx-auto">
+    <div className="flex flex-col gap-6 max-w-3xl mx-auto">
       {error && (
-        <div className="flex flex-col gap-2 p-3 rounded-md bg-red-100 text-red-700">
-          <div className="flex items-center gap-2">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="24"
-              height="24"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="flex-shrink-0"
-            >
-              <circle cx="12" cy="12" r="10"></circle>
-              <line x1="12" y1="8" x2="12" y2="12"></line>
-              <line x1="12" y1="16" x2="12.01" y2="16"></line>
-            </svg>
-            <span className="font-medium">Error</span>
-          </div>
-          <p>{error}</p>
+        <div className="flex items-center gap-2 p-3 rounded-md bg-red-100 text-red-700">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="24"
+            height="24"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="flex-shrink-0"
+          >
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="8" x2="12" y2="12"></line>
+            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+          </svg>
+          <span>{error}</span>
         </div>
       )}
 
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <label className="relative inline-flex items-center cursor-pointer">
@@ -951,14 +480,42 @@ const NavigationAssistant = () => {
             </label>
             <span className="text-lg font-medium">{isActive ? "Active" : "Inactive"}</span>
           </div>
+
+          <div className="flex items-center gap-2 text-sm">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className={isConnected ? "text-emerald-500" : "text-red-500"}
+            >
+              {isConnected ? (
+                <>
+                  <path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
+                  <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
+                </>
+              ) : (
+                <>
+                  <line x1="1" y1="1" x2="23" y2="23"></line>
+                  <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"></path>
+                  <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"></path>
+                  <path d="M10.71 5.05A16 16 0 0 1 22.58 9"></path>
+                  <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"></path>
+                  <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+                  <line x1="12" y1="20" x2="12.01" y2="20"></line>
+                </>
+              )}
+            </svg>
+            <span>{isConnected ? "Connected" : "Disconnected"}</span>
+          </div>
         </div>
 
-        {/* Larger camera view - taking up more screen space */}
-        <div
-          className="relative bg-black rounded-lg overflow-hidden w-full"
-          style={{ height: "75vh" }}
-          onClick={handleVideoClick}
-        >
+        <div className="relative aspect-video bg-black rounded-lg overflow-hidden">
           <video
             ref={videoRef}
             autoPlay
@@ -1003,7 +560,7 @@ const NavigationAssistant = () => {
               >
                 <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
                 <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
-                <line x1="12" y1="19" x2="12" y2="23"></line>
+                <line x1="12" y1="19" x2="12.01" y2="19"></line>
                 <line x1="8" y1="23" x2="16" y2="23"></line>
               </svg>
               <span className="text-xs">Speaking...</span>
@@ -1030,12 +587,6 @@ const NavigationAssistant = () => {
               <span className="text-xs">Capturing...</span>
             </div>
           )}
-
-          {(isIOS || isAndroid) && isActive && (
-            <div className="absolute top-2 left-0 right-0 text-center">
-              <span className="bg-black/70 text-white text-sm px-3 py-1 rounded-full">Tap here to start camera</span>
-            </div>
-          )}
         </div>
 
         <button
@@ -1047,60 +598,30 @@ const NavigationAssistant = () => {
           {isActive ? "Stop Navigation Assistant" : "Start Navigation Assistant"}
         </button>
 
-        {/* Hidden button for speech initialization - can be removed from UI but keep the functionality */}
-        <button
-          className="hidden"
-          ref={(btn) => {
-            // Auto-click this hidden button when isActive changes to true
-            if (btn && isActive) {
-              setTimeout(() => {
-                btn.click()
-              }, 500)
-            }
-          }}
-          onClick={triggerSpeechInit}
-        >
-          Initialize Speech
-        </button>
-
-        {/* You can remove the test speech section if you want, or keep it */}
-        {/* Enhanced test speech section */}
-        <div className="p-4 bg-blue-50 rounded-lg">
-          <h3 className="font-medium mb-2">Speech Test</h3>
-          <p className="text-sm mb-3">
-            If the app isn't speaking, tap the button below to test speech functionality. This will help diagnose any
-            issues with your device's speech capabilities.
+        <div className="p-4 bg-slate-100 rounded-lg">
+          <h3 className="font-medium mb-1">Status:</h3>
+          <p className="mb-2">
+            {isSpeaking
+              ? "Speaking guidance..."
+              : isCapturingRef.current
+                ? "Capturing frames..."
+                : isConnected
+                  ? "Ready to capture"
+                  : "Waiting for connection"}
           </p>
-          <div className="flex flex-col gap-2">
-            <button
-              className="w-full py-3 text-base font-medium rounded-md text-white bg-blue-500 hover:bg-blue-600 active:bg-blue-700"
-              onClick={handleTestSpeech}
-            >
-              Test Speech Now
-            </button>
-            <div className="text-sm mt-1">
-              Status:{" "}
-              <span
-                className={
-                  speechStatus.includes("Success")
-                    ? "text-green-600 font-medium"
-                    : speechStatus.includes("Error")
-                      ? "text-red-600 font-medium"
-                      : "text-blue-600 font-medium"
-                }
-              >
-                {speechStatus}
-              </span>
-            </div>
-          </div>
+          {lastMessage && (
+            <>
+              <h3 className="font-medium mb-1">Last Guidance:</h3>
+              <p>{lastMessage}</p>
+            </>
+          )}
+          {responseTime !== null && (
+            <>
+              <h3 className="font-medium mb-1">Response Time:</h3>
+              <p>{responseTime} seconds</p>
+            </>
+          )}
         </div>
-
-        {lastMessage && (
-          <div className="p-4 bg-slate-100 rounded-lg">
-            <h3 className="font-medium mb-1">Last Guidance:</h3>
-            <p>{lastMessage}</p>
-          </div>
-        )}
       </div>
     </div>
   )
