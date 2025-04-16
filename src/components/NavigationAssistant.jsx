@@ -20,26 +20,11 @@ const NavigationAssistant = () => {
   const requestTimestampRef = useRef(null)
   const audioContextRef = useRef(null)
 
-  // Helper function to detect iOS devices
-  const isIOS = () => {
-    const userAgent = navigator.userAgent || navigator.vendor || window.opera
-    return /iPad|iPhone|iPod/.test(userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
-  }
-
   // Socket.IO connection - connect to your Flask server
   useEffect(() => {
     if (!isActive) return
 
-    console.log("Initializing Socket.IO connection")
-
-    // Create socket with explicit transports for better iOS compatibility
-    const socket = io("https://see-for-me-api-production.up.railway.app/", {
-      transports: ["websocket", "polling"],
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-      timeout: 20000,
-    })
-
+    const socket = io("https://see-for-me-api-production.up.railway.app/")
     socketRef.current = socket
 
     socket.on("connect", () => {
@@ -63,17 +48,7 @@ const NavigationAssistant = () => {
       console.log("Received server response:", data)
       const message = data.message || "No guidance available"
       setLastMessage(message)
-
-      // For iOS, we need to trigger speech in response to a user interaction
-      // Since this is a server response, we'll use a workaround
-      if (isIOS()) {
-        // Use setTimeout to break out of the current call stack
-        setTimeout(() => {
-          speakMessage(message)
-        }, 10)
-      } else {
-        speakMessage(message)
-      }
+      speakMessage(message)
 
       // Play completion sound
       playCompletionSound()
@@ -87,20 +62,11 @@ const NavigationAssistant = () => {
       if (requestTimestampRef.current) {
         const elapsedTime = (Date.now() - requestTimestampRef.current) / 1000 // Convert to seconds
         setResponseTime(elapsedTime.toFixed(2)) // Format to 2 decimal places
-        console.log(`Response time: ${elapsedTime.toFixed(2)} seconds`)
+        console.log(Response time: ${elapsedTime.toFixed(2)} seconds)
       }
     })
 
-    // Add a ping mechanism to keep the connection alive
-    const pingInterval = setInterval(() => {
-      if (socket.connected) {
-        console.log("Sending ping to keep connection alive")
-        socket.emit("ping")
-      }
-    }, 30000) // Every 30 seconds
-
     return () => {
-      clearInterval(pingInterval)
       socket.disconnect()
       socketRef.current = null
     }
@@ -352,34 +318,9 @@ const NavigationAssistant = () => {
     const utterance = new SpeechSynthesisUtterance(message)
     utteranceRef.current = utterance
 
-    // Set properties
     utterance.rate = 1.0
     utterance.pitch = 1.0
     utterance.volume = 1.0
-
-    // For iOS, try to use a voice that's likely to be available
-    if (isIOS()) {
-      try {
-        // Get available voices
-        const voices = window.speechSynthesis.getVoices()
-        console.log("Available voices:", voices.length)
-
-        // Try to find an English voice
-        const englishVoice = voices.find((voice) => voice.lang.includes("en") && voice.localService)
-
-        if (englishVoice) {
-          console.log("Using voice:", englishVoice.name)
-          utterance.voice = englishVoice
-        }
-      } catch (e) {
-        console.error("Error setting voice:", e)
-      }
-    }
-
-    // Set up event handlers
-    utterance.onstart = () => {
-      console.log("Speech started")
-    }
 
     utterance.onend = () => {
       console.log("Speech completed")
@@ -397,32 +338,8 @@ const NavigationAssistant = () => {
       setTimeout(startCaptureCycle, 500)
     }
 
-    // Speak the message
-    window.speechSynthesis.speak(utterance)
+    speechSynthesis.speak(utterance)
 
-    // iOS workaround - keep checking and resuming speech
-    if (isIOS()) {
-      // This interval keeps speech going on iOS
-      const iosInterval = setInterval(() => {
-        // If speech synthesis is paused, resume it
-        if (window.speechSynthesis.paused) {
-          console.log("Resuming paused speech")
-          window.speechSynthesis.resume()
-        }
-
-        // If we're no longer speaking this utterance, clear the interval
-        if (!window.speechSynthesis.speaking || !isSpeaking) {
-          clearInterval(iosInterval)
-        }
-      }, 250)
-
-      // Safety timeout to prevent the interval from running forever
-      setTimeout(() => {
-        clearInterval(iosInterval)
-      }, 15000) // 15 seconds max
-    }
-
-    // Safety timeout in case onend doesn't fire
     const timeoutDuration = Math.max(5000, message.length * 100)
     setTimeout(() => {
       if (isSpeaking && utteranceRef.current === utterance) {
@@ -439,38 +356,6 @@ const NavigationAssistant = () => {
     setIsActive(newState)
 
     if (newState) {
-      // For iOS, we need to initialize audio and speech in direct response to user interaction
-      if (isIOS()) {
-        console.log("iOS device detected, initializing audio context and speech")
-
-        // Initialize audio context
-        if (!audioContextRef.current) {
-          try {
-            audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)()
-            // Play a silent sound to unlock audio
-            const silentSound = audioContextRef.current.createBuffer(1, 1, 22050)
-            const source = audioContextRef.current.createBufferSource()
-            source.buffer = silentSound
-            source.connect(audioContextRef.current.destination)
-            source.start(0)
-            console.log("Audio context initialized on iOS")
-          } catch (err) {
-            console.error("Failed to initialize audio context:", err)
-          }
-        }
-
-        // Initialize speech synthesis
-        if (window.speechSynthesis) {
-          // Speak an empty utterance to initialize speech synthesis
-          const silentUtterance = new SpeechSynthesisUtterance(" ")
-          silentUtterance.volume = 0.01 // Very low but not zero
-          silentUtterance.onend = () => console.log("Silent speech completed, speech system initialized")
-          silentUtterance.onerror = (e) => console.error("Speech initialization error:", e)
-          window.speechSynthesis.speak(silentUtterance)
-          console.log("Speech synthesis initialized on iOS")
-        }
-      }
-
       initCamera()
     } else {
       if (streamRef.current) {
@@ -586,7 +471,7 @@ const NavigationAssistant = () => {
             autoPlay
             playsInline
             muted
-            className={`w-full h-full object-cover ${isActive ? "opacity-100" : "opacity-50"}`}
+            className={w-full h-full object-cover ${isActive ? "opacity-100" : "opacity-50"}}
           />
 
           {!isActive && (
@@ -661,19 +546,6 @@ const NavigationAssistant = () => {
           onClick={toggleActive}
         >
           {isActive ? "Stop Navigation Assistant" : "Start Navigation Assistant"}
-        </button>
-
-        <button
-          className="w-full py-2 text-sm font-medium rounded-md text-white bg-blue-500 hover:bg-blue-600 mb-2"
-          onClick={() => {
-            // Force a test message to be spoken
-            const testMessage = "This is a test message to verify speech synthesis is working on this device."
-            console.log("Testing speech with message:", testMessage)
-            speakMessage(testMessage)
-            setLastMessage(testMessage)
-          }}
-        >
-          Test Speech
         </button>
 
         <div className="p-4 bg-slate-100 rounded-lg">
