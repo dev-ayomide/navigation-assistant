@@ -20,6 +20,14 @@ const NavigationAssistant = () => {
   const requestTimestampRef = useRef(null)
   const audioContextRef = useRef(null)
 
+  // Helper function to detect iOS devices
+  const isIOS = () => {
+    return (
+      /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+    )
+  }
+
   // Socket.IO connection - connect to your Flask server
   useEffect(() => {
     if (!isActive) return
@@ -62,7 +70,7 @@ const NavigationAssistant = () => {
       if (requestTimestampRef.current) {
         const elapsedTime = (Date.now() - requestTimestampRef.current) / 1000 // Convert to seconds
         setResponseTime(elapsedTime.toFixed(2)) // Format to 2 decimal places
-        console.log(Response time: ${elapsedTime.toFixed(2)} seconds)
+        console.log(`Response time: ${elapsedTime.toFixed(2)} seconds`)
       }
     })
 
@@ -322,14 +330,50 @@ const NavigationAssistant = () => {
     utterance.pitch = 1.0
     utterance.volume = 1.0
 
-    utterance.onend = () => {
-      console.log("Speech completed")
-      setIsSpeaking(false)
-      // Wait a short delay before starting next capture cycle
-      setTimeout(() => {
-        console.log("Starting next capture cycle after speech")
-        startCaptureCycle()
-      }, 500)
+    // iOS Safari requires special handling for speech synthesis
+    if (isIOS()) {
+      // For iOS, we need to speak immediately and then use a workaround to prevent premature cutting off
+      speechSynthesis.speak(utterance)
+
+      // iOS has a bug where it pauses speech synthesis when the page is inactive
+      // This interval keeps it active
+      const iosInterval = setInterval(() => {
+        if (speechSynthesis.paused) {
+          speechSynthesis.resume()
+        }
+
+        // If we're done speaking, clear the interval
+        if (!speechSynthesis.speaking) {
+          clearInterval(iosInterval)
+        }
+      }, 250)
+
+      // Store the interval so we can clear it later
+      const iosIntervalId = iosInterval
+
+      utterance.onend = () => {
+        clearInterval(iosIntervalId)
+        console.log("Speech completed")
+        setIsSpeaking(false)
+        // Wait a short delay before starting next capture cycle
+        setTimeout(() => {
+          console.log("Starting next capture cycle after speech")
+          startCaptureCycle()
+        }, 500)
+      }
+    } else {
+      // Non-iOS devices can use the standard approach
+      utterance.onend = () => {
+        console.log("Speech completed")
+        setIsSpeaking(false)
+        // Wait a short delay before starting next capture cycle
+        setTimeout(() => {
+          console.log("Starting next capture cycle after speech")
+          startCaptureCycle()
+        }, 500)
+      }
+
+      speechSynthesis.speak(utterance)
     }
 
     utterance.onerror = (event) => {
@@ -337,8 +381,6 @@ const NavigationAssistant = () => {
       setIsSpeaking(false)
       setTimeout(startCaptureCycle, 500)
     }
-
-    speechSynthesis.speak(utterance)
 
     const timeoutDuration = Math.max(5000, message.length * 100)
     setTimeout(() => {
@@ -357,6 +399,14 @@ const NavigationAssistant = () => {
 
     if (newState) {
       initCamera()
+
+      // For iOS, we need to "unsilence" the audio context with a user gesture
+      if (isIOS() && window.speechSynthesis) {
+        // Create and immediately speak a silent utterance to initialize speech synthesis
+        const silentUtterance = new SpeechSynthesisUtterance(" ")
+        silentUtterance.volume = 0
+        window.speechSynthesis.speak(silentUtterance)
+      }
     } else {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop())
@@ -471,7 +521,7 @@ const NavigationAssistant = () => {
             autoPlay
             playsInline
             muted
-            className={w-full h-full object-cover ${isActive ? "opacity-100" : "opacity-50"}}
+            className={`w-full h-full object-cover ${isActive ? "opacity-100" : "opacity-50"}`}
           />
 
           {!isActive && (
