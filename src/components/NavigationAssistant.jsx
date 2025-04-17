@@ -751,35 +751,6 @@ const NavigationAssistant = () => {
           {isActive ? "Stop Navigation Assistant" : "Start Navigation Assistant"}
         </button>
 
-        <div className="flex gap-2">
-          <button
-            className="flex-1 py-2 text-sm font-medium rounded-md text-white bg-blue-500 hover:bg-blue-600"
-            onClick={() => {
-              manualTestRef.current = true
-              const testMessage = "This is a test message to verify speech synthesis is working on this device."
-              debugLog("Testing speech with message:", testMessage)
-              speakMessage(testMessage)
-              setLastMessage(testMessage)
-            }}
-          >
-            Test Speech
-          </button>
-
-          <button
-            className="flex-1 py-2 text-sm font-medium rounded-md text-white bg-purple-500 hover:bg-purple-600"
-            onClick={testConnection}
-          >
-            Test Connection
-          </button>
-
-          <button
-            className="flex-1 py-2 text-sm font-medium rounded-md text-white bg-gray-500 hover:bg-gray-600"
-            onClick={() => setDebugMode(!debugMode)}
-          >
-            {debugMode ? "Disable Debug" : "Enable Debug"}
-          </button>
-        </div>
-
         <div className="p-4 bg-slate-100 rounded-lg">
           <h3 className="font-medium mb-1">Status:</h3>
           <p className="mb-2">
@@ -805,15 +776,6 @@ const NavigationAssistant = () => {
             <>
               <h3 className="font-medium mb-1">Response Time:</h3>
               <p>{responseTime} seconds</p>
-            </>
-          )}
-
-          {debugMode && (
-            <>
-              <h3 className="font-medium mb-1">Debug Info:</h3>
-              <p>Device: {isIOS() ? "iOS" : "Non-iOS"}</p>
-              <p>Browser: {navigator.userAgent}</p>
-              <p>Video Ready: {videoRef.current ? videoRef.current.readyState : "No video"}</p>
             </>
           )}
         </div>
