@@ -29,6 +29,13 @@ const NavigationAssistant = () => {
     return /iPad|iPhone|iPod/.test(userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
   }
 
+  // Debug log function
+  const debugLog = (message, ...args) => {
+    if (debugMode) {
+      console.log(`[DEBUG] ${message}`, ...args)
+    }
+  }
+
   // Socket.IO connection - connect to your Flask server
   useEffect(() => {
     if (!isActive) return
@@ -743,6 +750,7 @@ const NavigationAssistant = () => {
         >
           {isActive ? "Stop Navigation Assistant" : "Start Navigation Assistant"}
         </button>
+
 
         <div className="p-4 bg-slate-100 rounded-lg">
           <h3 className="font-medium mb-1">Status:</h3>
