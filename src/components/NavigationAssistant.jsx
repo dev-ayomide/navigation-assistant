@@ -11,6 +11,8 @@ const NavigationAssistant = () => {
   const [error, setError] = useState(null)
   const [isMobile, setIsMobile] = useState(false)
   const [responseTime, setResponseTime] = useState(null)
+  const [debugMode, setDebugMode] = useState(false)
+  const [connectionStatus, setConnectionStatus] = useState("Not connected")
 
   const videoRef = useRef(null)
   const streamRef = useRef(null)
@@ -19,6 +21,7 @@ const NavigationAssistant = () => {
   const utteranceRef = useRef(null)
   const requestTimestampRef = useRef(null)
   const audioContextRef = useRef(null)
+  const manualTestRef = useRef(false)
 
   // Helper function to detect iOS devices
   const isIOS = () => {
@@ -26,11 +29,19 @@ const NavigationAssistant = () => {
     return /iPad|iPhone|iPod/.test(userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
   }
 
+  // Debug log function
+  const debugLog = (message, ...args) => {
+    if (debugMode) {
+      console.log(`[DEBUG] ${message}`, ...args)
+    }
+  }
+
   // Socket.IO connection - connect to your Flask server
   useEffect(() => {
     if (!isActive) return
 
-    console.log("Initializing Socket.IO connection")
+    debugLog("Initializing Socket.IO connection")
+    setConnectionStatus("Connecting...")
 
     // Create socket with explicit transports for better iOS compatibility
     const socket = io("https://see-for-me-api-production.up.railway.app/", {
@@ -38,6 +49,7 @@ const NavigationAssistant = () => {
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
       timeout: 20000,
+      forceNew: true, // Force a new connection each time
     })
 
     socketRef.current = socket
@@ -45,34 +57,33 @@ const NavigationAssistant = () => {
     socket.on("connect", () => {
       setIsConnected(true)
       setError(null)
-      console.log("Socket connected to Flask server")
+      setConnectionStatus("Connected")
+      debugLog("Socket connected to Flask server")
     })
 
     socket.on("disconnect", () => {
       setIsConnected(false)
-      console.log("Socket disconnected from Flask server")
+      setConnectionStatus("Disconnected")
+      debugLog("Socket disconnected from Flask server")
     })
 
     socket.on("connect_error", (err) => {
       console.error("Socket connection error:", err)
-      setError("Connection error. Please try again.")
+      setError(`Connection error: ${err.message}`)
       setIsConnected(false)
+      setConnectionStatus(`Connection error: ${err.message}`)
     })
 
     socket.on("server_response", (data) => {
-      console.log("Received server response:", data)
+      debugLog("Received server response:", data)
       const message = data.message || "No guidance available"
       setLastMessage(message)
 
-      // For iOS, we need to trigger speech in response to a user interaction
-      // Since this is a server response, we'll use a workaround
-      if (isIOS()) {
-        // Use setTimeout to break out of the current call stack
-        setTimeout(() => {
-          speakMessage(message)
-        }, 10)
-      } else {
-        speakMessage(message)
+      // Calculate response time in seconds
+      if (requestTimestampRef.current) {
+        const elapsedTime = (Date.now() - requestTimestampRef.current) / 1000 // Convert to seconds
+        setResponseTime(elapsedTime.toFixed(2)) // Format to 2 decimal places
+        debugLog(`Response time: ${elapsedTime.toFixed(2)} seconds`)
       }
 
       // Play completion sound
@@ -83,28 +94,32 @@ const NavigationAssistant = () => {
         navigator.vibrate([100, 50, 200])
       }
 
-      // Calculate response time in seconds
-      if (requestTimestampRef.current) {
-        const elapsedTime = (Date.now() - requestTimestampRef.current) / 1000 // Convert to seconds
-        setResponseTime(elapsedTime.toFixed(2)) // Format to 2 decimal places
-        console.log(`Response time: ${elapsedTime.toFixed(2)} seconds`)
+      // For iOS, we need to handle speech differently
+      if (isIOS()) {
+        // Use a timeout to break the call stack
+        setTimeout(() => {
+          speakMessage(message)
+        }, 50)
+      } else {
+        speakMessage(message)
       }
     })
 
     // Add a ping mechanism to keep the connection alive
     const pingInterval = setInterval(() => {
       if (socket.connected) {
-        console.log("Sending ping to keep connection alive")
+        debugLog("Sending ping to keep connection alive")
         socket.emit("ping")
       }
-    }, 30000) // Every 30 seconds
+    }, 15000) // Every 15 seconds
 
     return () => {
       clearInterval(pingInterval)
       socket.disconnect()
       socketRef.current = null
+      setConnectionStatus("Not connected")
     }
-  }, [isActive])
+  }, [isActive, debugMode])
 
   // Initialize Audio Context for feedback sounds
   useEffect(() => {
@@ -179,27 +194,41 @@ const NavigationAssistant = () => {
 
   // Capture high-quality frame function
   async function captureHighQualityFrame(videoElement) {
-    return new Promise((resolve) => {
-      const canvas = document.createElement("canvas")
-      const ctx = canvas.getContext("2d")
+    return new Promise((resolve, reject) => {
+      try {
+        const canvas = document.createElement("canvas")
+        const ctx = canvas.getContext("2d")
 
-      // Set to higher resolution for better quality
-      canvas.width = videoElement.videoWidth
-      canvas.height = videoElement.videoHeight
+        // Set to higher resolution for better quality
+        canvas.width = videoElement.videoWidth
+        canvas.height = videoElement.videoHeight
 
-      // Draw the video frame to the canvas
-      ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height)
+        // Draw the video frame to the canvas
+        ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height)
 
-      // Convert to high-quality WebP format with minimal compression
-      canvas.toBlob(
-        (blob) => {
-          const reader = new FileReader()
-          reader.onloadend = () => resolve(reader.result)
-          reader.readAsArrayBuffer(blob)
-        },
-        "image/webp",
-        0.95,
-      ) // Using 0.95 quality (higher value = better quality)
+        // For iOS, we'll use JPEG instead of WebP for better compatibility
+        const imageFormat = isIOS() ? "image/jpeg" : "image/webp"
+        const imageQuality = isIOS() ? 0.8 : 0.95
+
+        // Convert to image format
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              reject(new Error("Failed to create blob from canvas"))
+              return
+            }
+
+            const reader = new FileReader()
+            reader.onloadend = () => resolve(reader.result)
+            reader.onerror = (e) => reject(e)
+            reader.readAsArrayBuffer(blob)
+          },
+          imageFormat,
+          imageQuality,
+        )
+      } catch (err) {
+        reject(err)
+      }
     })
   }
 
@@ -207,12 +236,12 @@ const NavigationAssistant = () => {
   async function captureAndSendTwoFrames(videoElement) {
     try {
       if (isSpeaking) {
-        console.log("Not capturing frames because speech is in progress")
+        debugLog("Not capturing frames because speech is in progress")
         return
       }
 
       isCapturingRef.current = true
-      console.log("Starting to capture high-quality frames")
+      debugLog("Starting to capture high-quality frames")
 
       // Play start sound and trigger haptic feedback
       playStartSound()
@@ -221,27 +250,44 @@ const NavigationAssistant = () => {
       }
 
       // Capture first frame
+      debugLog("Capturing first frame")
       const frame1 = await captureHighQualityFrame(videoElement)
+      debugLog("First frame captured, size:", frame1.byteLength)
 
       // Wait a moment before capturing second frame
       await new Promise((res) => setTimeout(res, 500))
 
       // Capture second frame
+      debugLog("Capturing second frame")
       const frame2 = await captureHighQualityFrame(videoElement)
+      debugLog("Second frame captured, size:", frame2.byteLength)
 
       const frames = [frame1, frame2]
 
-      console.log("Sending batch of", frames.length, "high-quality frames to Flask server")
+      debugLog("Sending batch of", frames.length, "frames to Flask server")
       if (socketRef.current && socketRef.current.connected) {
         // Record the timestamp before sending the frames
         requestTimestampRef.current = Date.now()
-        socketRef.current.emit("send_frames_batch", { frames: frames })
+
+        // For iOS, we need to ensure the frames are properly formatted
+        const frameData = frames.map((frame) => {
+          // If frame is already an ArrayBuffer, use it directly
+          if (frame instanceof ArrayBuffer) {
+            return frame
+          }
+          // Otherwise, try to convert it
+          return frame
+        })
+
+        socketRef.current.emit("send_frames_batch", { frames: frameData })
+        debugLog("Frames sent to server")
       } else {
         console.error("Socket not connected, can't send frames")
+        setError("Not connected to server. Please try again.")
       }
     } catch (err) {
       console.error("Error capturing frames:", err)
-      setError("Error capturing frames from camera")
+      setError(`Error capturing frames: ${err.message}`)
     } finally {
       isCapturingRef.current = false
     }
@@ -267,20 +313,34 @@ const NavigationAssistant = () => {
         throw new Error("Camera access is not supported by this browser")
       }
 
+      // For iOS, we need to use more conservative video constraints
       const constraints = {
         video: {
           facingMode: isMobile ? "environment" : "user",
-          width: { ideal: 1920 }, // Higher resolution for better quality
-          height: { ideal: 1080 },
+          width: isIOS() ? { ideal: 1280 } : { ideal: 1920 },
+          height: isIOS() ? { ideal: 720 } : { ideal: 1080 },
         },
       }
 
+      debugLog("Requesting camera with constraints:", constraints)
       const stream = await navigator.mediaDevices.getUserMedia(constraints)
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream
         streamRef.current = stream
         setError(null)
+
+        // For iOS, we need to wait for the video to be ready
+        if (isIOS()) {
+          videoRef.current.onloadedmetadata = () => {
+            debugLog(
+              "Video metadata loaded, video dimensions:",
+              videoRef.current.videoWidth,
+              "x",
+              videoRef.current.videoHeight,
+            )
+          }
+        }
       }
     } catch (err) {
       console.error("Camera initialization error:", err)
@@ -308,7 +368,7 @@ const NavigationAssistant = () => {
 
   const startCaptureCycle = () => {
     if (!isActive || !isConnected || isSpeaking || isCapturingRef.current) {
-      console.log("Not starting capture cycle:", {
+      debugLog("Not starting capture cycle:", {
         isActive,
         isConnected,
         isSpeaking,
@@ -325,12 +385,12 @@ const NavigationAssistant = () => {
     }
 
     if (video.readyState < 2) {
-      console.log("Video not ready, waiting...")
+      debugLog("Video not ready, waiting...")
       setTimeout(startCaptureCycle, 100)
       return
     }
 
-    console.log("Starting capture cycle")
+    debugLog("Starting capture cycle")
     captureAndSendTwoFrames(video)
   }
 
@@ -347,7 +407,7 @@ const NavigationAssistant = () => {
     window.speechSynthesis.cancel()
 
     setIsSpeaking(true)
-    console.log("Starting to speak:", message)
+    debugLog("Starting to speak:", message)
 
     const utterance = new SpeechSynthesisUtterance(message)
     utteranceRef.current = utterance
@@ -362,13 +422,13 @@ const NavigationAssistant = () => {
       try {
         // Get available voices
         const voices = window.speechSynthesis.getVoices()
-        console.log("Available voices:", voices.length)
+        debugLog("Available voices:", voices.length)
 
         // Try to find an English voice
         const englishVoice = voices.find((voice) => voice.lang.includes("en") && voice.localService)
 
         if (englishVoice) {
-          console.log("Using voice:", englishVoice.name)
+          debugLog("Using voice:", englishVoice.name)
           utterance.voice = englishVoice
         }
       } catch (e) {
@@ -378,23 +438,34 @@ const NavigationAssistant = () => {
 
     // Set up event handlers
     utterance.onstart = () => {
-      console.log("Speech started")
+      debugLog("Speech started")
     }
 
     utterance.onend = () => {
-      console.log("Speech completed")
+      debugLog("Speech completed")
       setIsSpeaking(false)
-      // Wait a short delay before starting next capture cycle
-      setTimeout(() => {
-        console.log("Starting next capture cycle after speech")
-        startCaptureCycle()
-      }, 500)
+
+      // Only start next capture cycle if this wasn't a manual test
+      if (!manualTestRef.current) {
+        // Wait a short delay before starting next capture cycle
+        setTimeout(() => {
+          debugLog("Starting next capture cycle after speech")
+          startCaptureCycle()
+        }, 500)
+      }
+
+      manualTestRef.current = false
     }
 
     utterance.onerror = (event) => {
       console.error("Speech synthesis error:", event)
       setIsSpeaking(false)
-      setTimeout(startCaptureCycle, 500)
+
+      if (!manualTestRef.current) {
+        setTimeout(startCaptureCycle, 500)
+      }
+
+      manualTestRef.current = false
     }
 
     // Speak the message
@@ -406,7 +477,7 @@ const NavigationAssistant = () => {
       const iosInterval = setInterval(() => {
         // If speech synthesis is paused, resume it
         if (window.speechSynthesis.paused) {
-          console.log("Resuming paused speech")
+          debugLog("Resuming paused speech")
           window.speechSynthesis.resume()
         }
 
@@ -428,7 +499,12 @@ const NavigationAssistant = () => {
       if (isSpeaking && utteranceRef.current === utterance) {
         console.warn("Speech timeout reached, forcing next cycle")
         setIsSpeaking(false)
-        startCaptureCycle()
+
+        if (!manualTestRef.current) {
+          startCaptureCycle()
+        }
+
+        manualTestRef.current = false
       }
     }, timeoutDuration)
   }
@@ -441,7 +517,7 @@ const NavigationAssistant = () => {
     if (newState) {
       // For iOS, we need to initialize audio and speech in direct response to user interaction
       if (isIOS()) {
-        console.log("iOS device detected, initializing audio context and speech")
+        debugLog("iOS device detected, initializing audio context and speech")
 
         // Initialize audio context
         if (!audioContextRef.current) {
@@ -453,7 +529,7 @@ const NavigationAssistant = () => {
             source.buffer = silentSound
             source.connect(audioContextRef.current.destination)
             source.start(0)
-            console.log("Audio context initialized on iOS")
+            debugLog("Audio context initialized on iOS")
           } catch (err) {
             console.error("Failed to initialize audio context:", err)
           }
@@ -464,10 +540,10 @@ const NavigationAssistant = () => {
           // Speak an empty utterance to initialize speech synthesis
           const silentUtterance = new SpeechSynthesisUtterance(" ")
           silentUtterance.volume = 0.01 // Very low but not zero
-          silentUtterance.onend = () => console.log("Silent speech completed, speech system initialized")
+          silentUtterance.onend = () => debugLog("Silent speech completed, speech system initialized")
           silentUtterance.onerror = (e) => console.error("Speech initialization error:", e)
           window.speechSynthesis.speak(silentUtterance)
-          console.log("Speech synthesis initialized on iOS")
+          debugLog("Speech synthesis initialized on iOS")
         }
       }
 
@@ -489,10 +565,10 @@ const NavigationAssistant = () => {
   // Start capture cycle when active and connected
   useEffect(() => {
     if (isActive && isConnected && !isSpeaking && !isCapturingRef.current) {
-      console.log("Initial capture cycle starting")
+      debugLog("Initial capture cycle starting")
       startCaptureCycle()
     }
-  }, [isActive, isConnected, isSpeaking])
+  }, [isActive, isConnected, isSpeaking, debugMode])
 
   // Clean up on unmount
   useEffect(() => {
@@ -511,6 +587,18 @@ const NavigationAssistant = () => {
       }
     }
   }, [])
+
+  // Test the connection by sending a manual request
+  const testConnection = () => {
+    if (!socketRef.current || !socketRef.current.connected) {
+      setError("Not connected to server. Please activate the assistant first.")
+      return
+    }
+
+    debugLog("Sending test request to server")
+    requestTimestampRef.current = Date.now()
+    socketRef.current.emit("test_connection", { test: true })
+  }
 
   return (
     <div className="flex flex-col gap-6 max-w-3xl mx-auto">
@@ -663,18 +751,34 @@ const NavigationAssistant = () => {
           {isActive ? "Stop Navigation Assistant" : "Start Navigation Assistant"}
         </button>
 
-        <button
-          className="w-full py-2 text-sm font-medium rounded-md text-white bg-blue-500 hover:bg-blue-600 mb-2"
-          onClick={() => {
-            // Force a test message to be spoken
-            const testMessage = "This is a test message to verify speech synthesis is working on this device."
-            console.log("Testing speech with message:", testMessage)
-            speakMessage(testMessage)
-            setLastMessage(testMessage)
-          }}
-        >
-          Test Speech
-        </button>
+        <div className="flex gap-2">
+          <button
+            className="flex-1 py-2 text-sm font-medium rounded-md text-white bg-blue-500 hover:bg-blue-600"
+            onClick={() => {
+              manualTestRef.current = true
+              const testMessage = "This is a test message to verify speech synthesis is working on this device."
+              debugLog("Testing speech with message:", testMessage)
+              speakMessage(testMessage)
+              setLastMessage(testMessage)
+            }}
+          >
+            Test Speech
+          </button>
+
+          <button
+            className="flex-1 py-2 text-sm font-medium rounded-md text-white bg-purple-500 hover:bg-purple-600"
+            onClick={testConnection}
+          >
+            Test Connection
+          </button>
+
+          <button
+            className="flex-1 py-2 text-sm font-medium rounded-md text-white bg-gray-500 hover:bg-gray-600"
+            onClick={() => setDebugMode(!debugMode)}
+          >
+            {debugMode ? "Disable Debug" : "Enable Debug"}
+          </button>
+        </div>
 
         <div className="p-4 bg-slate-100 rounded-lg">
           <h3 className="font-medium mb-1">Status:</h3>
@@ -687,6 +791,10 @@ const NavigationAssistant = () => {
                   ? "Ready to capture"
                   : "Waiting for connection"}
           </p>
+
+          <h3 className="font-medium mb-1">Connection:</h3>
+          <p className="mb-2">{connectionStatus}</p>
+
           {lastMessage && (
             <>
               <h3 className="font-medium mb-1">Last Guidance:</h3>
@@ -697,6 +805,15 @@ const NavigationAssistant = () => {
             <>
               <h3 className="font-medium mb-1">Response Time:</h3>
               <p>{responseTime} seconds</p>
+            </>
+          )}
+
+          {debugMode && (
+            <>
+              <h3 className="font-medium mb-1">Debug Info:</h3>
+              <p>Device: {isIOS() ? "iOS" : "Non-iOS"}</p>
+              <p>Browser: {navigator.userAgent}</p>
+              <p>Video Ready: {videoRef.current ? videoRef.current.readyState : "No video"}</p>
             </>
           )}
         </div>
