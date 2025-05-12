@@ -44,7 +44,7 @@ const NavigationAssistant = () => {
     setConnectionStatus("Connecting...")
 
     // Create socket with explicit transports for better iOS compatibility
-    const socket = io("https://see-for-me-api-production.up.railway.app/", {
+    const socket = io("http://68.221.184.76:8000/", {
       transports: ["websocket", "polling"],
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
