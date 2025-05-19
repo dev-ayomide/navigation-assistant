@@ -44,7 +44,7 @@ const NavigationAssistant = () => {
     setConnectionStatus("Connecting...")
 
     // Create socket with explicit transports for better iOS compatibility
-    const socket = io("https://see-for-me-medium-yolo.kindcoast-321ea27c.spaincentral.azurecontainerapps.io/", {
+    const socket = io("https://see-for-me-backend.kindcoast-321ea27c.spaincentral.azurecontainerapps.io/", {
       transports: ["websocket", "polling"],
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
