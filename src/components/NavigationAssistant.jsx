@@ -668,7 +668,7 @@ const NavigationAssistant = () => {
           </div>
         </div>
 
-        <div className="relative aspect-[9/16] sm:aspect-video max-h-[60vh] bg-black rounded-lg overflow-hidden">
+        <div className="relative aspect-[9/16] sm:aspect-video max-h-[50vh] w-full max-w-xs sm:max-w-2xl bg-black rounded-lg overflow-hidden">
           <video
             ref={videoRef}
             autoPlay
